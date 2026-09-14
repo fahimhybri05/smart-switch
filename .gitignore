@@ -1,0 +1,6 @@
+# Root catch-all — each sub-project (app/, backend/, firmware/,
+# firmware-esp8266/) also has its own .gitignore for its own tooling.
+.DS_Store
+*.log
+/dashboard/node_modules/
+/dashboard/dist/

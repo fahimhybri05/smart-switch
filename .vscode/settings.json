@@ -1,0 +1,6 @@
+{
+    "cmake.sourceDirectory": "/var/www/html/smart-switch/firmware",
+    "chat.tools.terminal.autoApprove": {
+        "flutter": true
+    }
+}

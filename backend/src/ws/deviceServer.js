@@ -1,0 +1,176 @@
+import { logActivity } from '../activity.js';
+import { evaluateStateTriggeredAutomations } from '../automations/engine.js';
+import { hashDeviceSecret } from '../auth/deviceSecret.js';
+import { pool } from '../db/pool.js';
+import { takeAttribution } from './attribution.js';
+import {
+  broadcastToHousehold,
+  registerDevice,
+  resolveDeviceResponse,
+  unregisterDevice,
+} from './registry.js';
+
+const AUTH_TIMEOUT_MS = 5_000;
+
+/** Looks up (or trust-on-first-use creates) the device row, verifying the
+ * presented secret against whatever hash is already stored. Mirrors
+ * routes/devices.js's claim logic so it doesn't matter whether the device
+ * or the claiming app connects/registers first. */
+async function authenticateDevice(deviceId, cloudSecret) {
+  const secretHash = hashDeviceSecret(cloudSecret);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      'SELECT household_id, cloud_secret_hash FROM devices WHERE device_id = $1 FOR UPDATE',
+      [deviceId],
+    );
+    const existing = rows[0];
+
+    if (existing) {
+      if (existing.cloud_secret_hash !== secretHash) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      await client.query(
+        'UPDATE devices SET is_online = true, last_seen_at = now() WHERE device_id = $1',
+        [deviceId],
+      );
+      await client.query('COMMIT');
+      return { householdId: existing.household_id };
+    }
+
+    await client.query(
+      `INSERT INTO devices (device_id, cloud_secret_hash, friendly_name, is_online, last_seen_at)
+       VALUES ($1, $2, $1, true, now())`,
+      [deviceId, secretHash],
+    );
+    await client.query('COMMIT');
+    return { householdId: null };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function markOffline(deviceId) {
+  await pool.query(
+    'UPDATE devices SET is_online = false WHERE device_id = $1',
+    [deviceId],
+  );
+}
+
+async function recordStateChange(deviceId, channelIdx, state) {
+  const { rows } = await pool.query(
+    `INSERT INTO cached_channel_state (device_id, channel_idx, state, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (device_id, channel_idx)
+     DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+     RETURNING (SELECT household_id FROM devices WHERE device_id = $1) AS household_id`,
+    [deviceId, channelIdx, state],
+  );
+  return rows[0]?.household_id ?? null;
+}
+
+export function handleDeviceConnection(ws) {
+  let deviceId = null;
+  let authenticated = false;
+
+  const authTimer = setTimeout(() => {
+    if (!authenticated) {
+      ws.close(4001, 'auth timeout');
+    }
+  }, AUTH_TIMEOUT_MS);
+
+  ws.on('message', async (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      return; // ignore malformed frames rather than tearing down the socket
+    }
+
+    if (!authenticated) {
+      if (!msg.deviceId || !msg.cloudSecret) {
+        return ws.close(4001, 'expected {deviceId, cloudSecret}');
+      }
+      try {
+        const result = await authenticateDevice(msg.deviceId, msg.cloudSecret);
+        if (!result) {
+          console.warn(`device auth rejected: invalid secret for ${msg.deviceId}`);
+          return ws.close(4003, 'invalid device secret');
+        }
+        clearTimeout(authTimer);
+        deviceId = msg.deviceId;
+        authenticated = true;
+        registerDevice(deviceId, ws);
+        console.log(`device connected: ${deviceId}`);
+        if (result.householdId) {
+          broadcastToHousehold(result.householdId, { event: 'device_online', deviceId });
+        }
+      } catch (err) {
+        console.error(`device auth failed for ${msg.deviceId}`, err);
+        ws.close(1011, 'internal error');
+      }
+      return;
+    }
+
+    // Relayed responses.
+    if (msg.reqId && 'status' in msg) {
+      resolveDeviceResponse(msg.reqId, msg.status, msg.body);
+      return;
+    }
+
+    // Unsolicited local-schedule-fired state change. This is the ONE
+    // true "a channel actually changed" signal in the whole system,
+    // regardless of what caused it — activity logging and (once
+    // automations ships) automation-trigger evaluation both hook here.
+    if (msg.event === 'state_changed' && typeof msg.channelIdx === 'number') {
+      const attribution = takeAttribution(deviceId, msg.channelIdx, msg.state) ?? {
+        source: 'device',
+        actorUserId: null,
+        automationId: null,
+      };
+      const { depth = 0, chainAutomationIds = new Set() } = attribution;
+      const householdId = await recordStateChange(deviceId, msg.channelIdx, msg.state);
+      if (householdId) {
+        logActivity({
+          householdId,
+          deviceId,
+          channelIdx: msg.channelIdx,
+          state: msg.state,
+          ...attribution,
+        }).catch((err) => console.error('logActivity failed', err));
+        broadcastToHousehold(householdId, {
+          event: 'state_changed',
+          deviceId,
+          channelIdx: msg.channelIdx,
+          state: msg.state,
+        });
+        evaluateStateTriggeredAutomations({
+          deviceId,
+          channelIdx: msg.channelIdx,
+          state: msg.state,
+          householdId,
+          depth,
+          chainAutomationIds,
+        }).catch((err) => console.error('evaluateStateTriggeredAutomations failed', err));
+      }
+    }
+  });
+
+  ws.on('close', (code, reason) => {
+    clearTimeout(authTimer);
+    if (deviceId) {
+      console.log(
+        `device disconnected: ${deviceId} (code=${code} reason=${reason})`,
+      );
+      unregisterDevice(deviceId, ws);
+      markOffline(deviceId).catch((err) =>
+        console.error(`failed to mark ${deviceId} offline`, err),
+      );
+    }
+  });
+}

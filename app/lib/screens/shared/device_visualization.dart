@@ -1,0 +1,784 @@
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+
+/// Physical device states rendered by [DeviceVisualization].
+enum DeviceVisualState { off, on, connecting, pending, offline, error }
+
+/// A lightweight, layered hardware illustration for the dashboard.
+///
+/// The illustration deliberately uses transforms, opacity and CustomPainter
+/// instead of image assets so rocker movement and indicators remain animated.
+class DeviceVisualization extends StatefulWidget {
+  const DeviceVisualization({
+    super.key,
+    required this.state,
+    required this.kind,
+    this.gangCount = 1,
+    this.height = 122,
+    this.onTap,
+  });
+
+  final DeviceVisualState state;
+  final DeviceVisualKind kind;
+  final int gangCount;
+  final double height;
+  final VoidCallback? onTap;
+
+  @override
+  State<DeviceVisualization> createState() => _DeviceVisualizationState();
+}
+
+class _DeviceVisualizationState extends State<DeviceVisualization> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = widget.state == DeviceVisualState.on;
+    final isUnavailable = widget.state == DeviceVisualState.offline;
+    final isPending =
+        widget.state == DeviceVisualState.pending ||
+        widget.state == DeviceVisualState.connecting;
+    final accent = Theme.of(context).colorScheme.primary;
+
+    return Semantics(
+      button: widget.onTap != null,
+      label: '${widget.kind.label}, ${widget.state.label}',
+      child: GestureDetector(
+        onTapDown: widget.onTap == null
+            ? null
+            : (_) => setState(() => _pressed = true),
+        onTapUp: widget.onTap == null
+            ? null
+            : (_) {
+                setState(() => _pressed = false);
+                widget.onTap?.call();
+              },
+        onTapCancel: widget.onTap == null
+            ? null
+            : () => setState(() => _pressed = false),
+        child: AnimatedScale(
+          scale: _pressed ? 0.96 : 1,
+          duration: const Duration(milliseconds: 100),
+          curve: Curves.easeOut,
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: isActive ? 1 : 0),
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutCubic,
+            builder: (context, progress, child) {
+              return CustomPaint(
+                painter: _DevicePainter(
+                  kind: widget.kind,
+                  state: widget.state,
+                  progress: progress,
+                  gangCount: widget.gangCount.clamp(1, 4),
+                  accent: accent,
+                  pressed: _pressed,
+                ),
+                child: child,
+              );
+            },
+            child: SizedBox(
+              height: widget.height,
+              width: double.infinity,
+              child: Center(
+                child: isPending
+                    ? SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: accent,
+                        ),
+                      )
+                    : isUnavailable
+                    ? Icon(Icons.wifi_off_rounded, color: accent, size: 22)
+                    : null,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+enum DeviceVisualKind {
+  switchDevice('Smart switch'),
+  plug('Smart plug'),
+  socket('Smart socket'),
+  light('Smart light'),
+  ledStrip('LED strip'),
+  fishTank('Fish tank'),
+  fan('Fan'),
+  multiPlug('Multi-plug'),
+  tv('Television'),
+  router('Router'),
+  appliance('Smart appliance');
+
+  const DeviceVisualKind(this.label);
+
+  final String label;
+
+  static DeviceVisualKind fromName(String name) {
+    final value = name.toLowerCase();
+    if (value.contains('led') || value.contains('strip')) return ledStrip;
+    if (value.contains('fish') || value.contains('tank') || value.contains('aquarium')) {
+      return fishTank;
+    }
+    if (value.contains('fan')) return fan;
+    if (value.contains('multi') || value.contains('power strip')) return multiPlug;
+    if (value.contains('tv') || value.contains('television')) return tv;
+    if (value.contains('router') || value.contains('wifi')) return router;
+    if (value.contains('plug')) return plug;
+    if (value.contains('socket') || value.contains('outlet')) return socket;
+    if (value.contains('light') || value.contains('lamp') || value.contains('bulb')) {
+      return light;
+    }
+    if (value.contains('switch') || value.contains('relay')) return switchDevice;
+    return appliance;
+  }
+}
+
+extension on DeviceVisualState {
+  String get label => switch (this) {
+    DeviceVisualState.off => 'off',
+    DeviceVisualState.on => 'on',
+    DeviceVisualState.connecting => 'connecting',
+    DeviceVisualState.pending => 'command pending',
+    DeviceVisualState.offline => 'offline',
+    DeviceVisualState.error => 'error',
+  };
+}
+
+class _DevicePainter extends CustomPainter {
+  const _DevicePainter({
+    required this.kind,
+    required this.state,
+    required this.progress,
+    required this.gangCount,
+    required this.accent,
+    required this.pressed,
+  });
+
+  final DeviceVisualKind kind;
+  final DeviceVisualState state;
+  final double progress;
+  final int gangCount;
+  final Color accent;
+  final bool pressed;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final isDimmed =
+        state == DeviceVisualState.offline || state == DeviceVisualState.error;
+    final opacity = isDimmed ? 0.52 : 1.0;
+    final width = math.min(size.width * 0.64, 190.0);
+    final plateHeight = width * 0.94;
+    final plate = Rect.fromCenter(
+      center: center,
+      width: width,
+      height: plateHeight,
+    );
+
+    // Neutral product backdrop keeps the physical hardware visually honest.
+    final wall = RRect.fromRectAndRadius(
+      Rect.fromLTWH(4, 5, size.width - 8, size.height - 10),
+      const Radius.circular(18),
+    );
+    canvas.drawRRect(
+      wall,
+      Paint()..color = const Color(0xFFF7F8F7),
+    );
+
+    final shadowPaint = Paint()
+      ..color = Colors.black.withValues(alpha: 0.18 * opacity)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        plate.shift(Offset(0, pressed ? 3 : 6)),
+        const Radius.circular(14),
+      ),
+      shadowPaint,
+    );
+
+    final underPlate = RRect.fromRectAndRadius(
+      plate.inflate(2),
+      const Radius.circular(15),
+    );
+    canvas.drawRRect(
+      underPlate,
+      Paint()..color = const Color(0xFFB0B6B6).withValues(alpha: 0.72 * opacity),
+    );
+
+    final surround = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Color.lerp(const Color(0xFFFDFDFD), const Color(0xFFD8DEDF), 0.3)!,
+          const Color(0xFFD7DDDE),
+        ],
+      ).createShader(plate)
+      ..style = PaintingStyle.fill;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(plate, const Radius.circular(13)),
+      surround,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(plate, const Radius.circular(13)),
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.9 * opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2,
+    );
+
+    switch (kind) {
+      case DeviceVisualKind.switchDevice:
+        _paintSwitch(canvas, plate, opacity);
+      case DeviceVisualKind.plug:
+        _paintPlug(canvas, plate, opacity);
+      case DeviceVisualKind.socket:
+        _paintSocket(canvas, plate, opacity);
+      case DeviceVisualKind.light:
+        _paintLight(canvas, plate, opacity);
+      case DeviceVisualKind.ledStrip:
+        _paintLedStrip(canvas, plate, opacity);
+      case DeviceVisualKind.fishTank:
+        _paintFishTank(canvas, plate, opacity);
+      case DeviceVisualKind.fan:
+        _paintFan(canvas, plate, opacity);
+      case DeviceVisualKind.multiPlug:
+        _paintMultiPlug(canvas, plate, opacity);
+      case DeviceVisualKind.tv:
+        _paintTv(canvas, plate, opacity);
+      case DeviceVisualKind.router:
+        _paintRouter(canvas, plate, opacity);
+      case DeviceVisualKind.appliance:
+        _paintAppliance(canvas, plate, opacity);
+    }
+
+    if (progress > 0 && kind != DeviceVisualKind.switchDevice) {
+      final glow = Paint()
+        ..color = accent.withValues(alpha: 0.16 * progress * opacity)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(plate.deflate(5), const Radius.circular(10)),
+        glow,
+      );
+    }
+  }
+
+  void _paintSwitch(Canvas canvas, Rect plate, double opacity) {
+    final frame = plate.deflate(plate.width * 0.16);
+    final gangWidth = frame.width / gangCount;
+    final frameShadow = Paint()
+      ..color = Colors.black.withValues(alpha: 0.12 * opacity)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        frame.shift(const Offset(0, 2)),
+        const Radius.circular(10),
+      ),
+      frameShadow,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(frame, const Radius.circular(10)),
+      Paint()..color = const Color(0xFF9C9F9F).withValues(alpha: opacity),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(frame.deflate(2), const Radius.circular(8)),
+      Paint()..color = const Color(0xFFFDFDFD),
+    );
+
+    // The two fasteners are part of the physical product, not decoration.
+    final screwPaint = Paint()
+      ..color = const Color(0xFF8E9493).withValues(alpha: opacity)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9;
+    for (final x in [plate.left + plate.width * 0.105, plate.right - plate.width * 0.105]) {
+      final screwCenter = Offset(x, plate.center.dy);
+      canvas.drawCircle(screwCenter, 4.3, Paint()..color = const Color(0xFFE9ECEB));
+      canvas.drawCircle(screwCenter, 4.3, screwPaint);
+      canvas.drawLine(
+        screwCenter.translate(-1.8, 0),
+        screwCenter.translate(1.8, 0),
+        screwPaint,
+      );
+      canvas.drawLine(
+        screwCenter.translate(0, -1.8),
+        screwCenter.translate(0, 1.8),
+        screwPaint,
+      );
+    }
+
+    for (var i = 0; i < gangCount; i++) {
+      final left = frame.left + (i * gangWidth);
+      final offRocker = Rect.fromCenter(
+        center: Offset(left + gangWidth / 2, frame.center.dy + frame.height * 0.02),
+        width: gangWidth * 0.58,
+        height: frame.height * 0.52,
+      );
+      final onRocker = Rect.fromLTWH(
+        left + gangWidth * 0.09,
+        frame.top + frame.height * 0.035,
+        gangWidth * 0.82,
+        frame.height * 0.91,
+      );
+      if (i > 0) {
+        canvas.drawLine(
+          Offset(left, frame.top + 4),
+          Offset(left, frame.bottom - 4),
+          Paint()
+            ..color = const Color(0xFFB7BBBB).withValues(alpha: opacity)
+            ..strokeWidth = 1,
+        );
+      }
+      final rocker = Rect.lerp(offRocker, onRocker, progress)!;
+      final rockerPaint = Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFFFFFFFF),
+            Color.lerp(
+              const Color(0xFFF4F5F4),
+              const Color(0xFFDDE2E1),
+              progress,
+            )!,
+          ],
+        ).createShader(rocker);
+      final rockerShadow = rocker.shift(const Offset(0, 3));
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rockerShadow, const Radius.circular(6)),
+        Paint()..color = Colors.black.withValues(alpha: 0.18 * opacity),
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rocker, const Radius.circular(6)),
+        rockerPaint,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rocker, const Radius.circular(6)),
+        Paint()
+          ..color = const Color(0xFF969C9B).withValues(alpha: opacity)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4,
+      );
+      canvas.drawLine(
+        Offset(rocker.left + rocker.width * 0.18, rocker.top + 3),
+        Offset(rocker.right - rocker.width * 0.18, rocker.top + 3),
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.88 * opacity)
+          ..strokeWidth = 1,
+      );
+
+      final ledOn = progress > 0.5;
+      final ledRect = Rect.fromCenter(
+        center: Offset(rocker.center.dx, rocker.bottom - rocker.height * 0.09),
+        width: math.min(rocker.width * 0.28, 12),
+        height: 3,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(ledRect, const Radius.circular(2)),
+        Paint()..color = ledOn
+            ? const Color(0xFF69C83D).withValues(alpha: opacity)
+            : const Color(0xFF969B9A).withValues(alpha: 0.35 * opacity),
+      );
+    }
+  }
+
+  void _paintPlug(Canvas canvas, Rect plate, double opacity) {
+    final center = plate.center;
+    final body = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: center,
+        width: plate.width * 0.57,
+        height: plate.height * 0.62,
+      ),
+      const Radius.circular(16),
+    );
+    canvas.drawRRect(
+      body.shift(const Offset(0, 3)),
+      Paint()..color = Colors.black.withValues(alpha: 0.13 * opacity),
+    );
+    canvas.drawRRect(body, Paint()..color = const Color(0xFFFDFDFD));
+    canvas.drawRRect(
+      body,
+      Paint()
+        ..color = const Color(0xFFA5AAAA).withValues(alpha: opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    final outlet = Offset(center.dx, center.dy + body.height * 0.06);
+    _paintRoundOutlet(canvas, outlet, body.width * 0.27, opacity);
+    final prongPaint = Paint()..color = const Color(0xFFB7A47B).withValues(alpha: opacity);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(body.left + 11, body.center.dy), width: 6, height: 24),
+        const Radius.circular(3),
+      ),
+      prongPaint,
+    );
+    canvas.drawCircle(
+      Offset(body.right - 13, body.top + 14),
+      3.5,
+      Paint()..color = progress > 0.45 ? accent : const Color(0xFF8B8E8E),
+    );
+  }
+
+  void _paintSocket(Canvas canvas, Rect plate, double opacity) {
+    final center = plate.center;
+    final body = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: center, width: plate.width * 0.67, height: plate.height * 0.7),
+      const Radius.circular(12),
+    );
+    canvas.drawRRect(body, Paint()..color = const Color(0xFFFDFDFD));
+    canvas.drawRRect(
+      body,
+      Paint()
+        ..color = const Color(0xFFA5AAAA).withValues(alpha: opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    final outletCenter = center.translate(0, 2);
+    canvas.drawCircle(
+      outletCenter,
+      body.width * 0.34,
+      Paint()..color = const Color(0xFFB8BDBC).withValues(alpha: opacity),
+    );
+    canvas.drawCircle(
+      outletCenter,
+      body.width * 0.31,
+      Paint()..color = const Color(0xFFDCE0DF).withValues(alpha: opacity),
+    );
+    _paintRoundOutlet(canvas, outletCenter, body.width * 0.28, opacity);
+    canvas.drawCircle(
+      outletCenter,
+      5,
+      Paint()..color = const Color(0xFF9B8D6B).withValues(alpha: opacity),
+    );
+    canvas.drawLine(
+      outletCenter.translate(-3, -2),
+      outletCenter.translate(3, 2),
+      Paint()..color = const Color(0xFFF0E4BF).withValues(alpha: opacity)..strokeWidth = 1,
+    );
+    canvas.drawCircle(
+      Offset(body.right - 10, body.top + 12),
+      3,
+      Paint()..color = progress > 0.45 ? accent : const Color(0xFF8B8E8E),
+    );
+  }
+
+  void _paintRoundOutlet(
+    Canvas canvas,
+    Offset center,
+    double radius,
+    double opacity,
+  ) {
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()..color = const Color(0xFF626866).withValues(alpha: opacity),
+    );
+    canvas.drawCircle(
+      center,
+      radius * 0.88,
+      Paint()..color = const Color(0xFF151A19).withValues(alpha: opacity),
+    );
+    final hole = Paint()..color = const Color(0xFF050706).withValues(alpha: opacity);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: center.translate(-radius * 0.37, 0),
+        width: radius * 0.18,
+        height: radius * 0.48,
+      ),
+      hole,
+    );
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: center.translate(radius * 0.37, 0),
+        width: radius * 0.18,
+        height: radius * 0.48,
+      ),
+      hole,
+    );
+    final ground = Paint()..color = const Color(0xFFC6AE76).withValues(alpha: opacity);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: center.translate(0, -radius * 0.6), width: radius * 0.16, height: radius * 0.32),
+        const Radius.circular(2),
+      ),
+      ground,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: center.translate(0, radius * 0.6), width: radius * 0.16, height: radius * 0.32),
+        const Radius.circular(2),
+      ),
+      ground,
+    );
+  }
+
+  void _paintSocketHoles(
+    Canvas canvas,
+    Offset center,
+    double radius,
+    double opacity,
+  ) {
+    final holePaint = Paint()
+      ..color = const Color(0xFF717777).withValues(alpha: opacity);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: center.translate(-radius * 1.4, -radius * 0.9),
+        width: radius,
+        height: radius * 2.5,
+      ),
+      holePaint,
+    );
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: center.translate(radius * 1.4, radius * 0.9),
+        width: radius,
+        height: radius * 2.5,
+      ),
+      holePaint,
+    );
+  }
+
+  void _paintLight(Canvas canvas, Rect plate, double opacity) {
+    final center = plate.center.translate(0, -5);
+    final glow = Paint()
+      ..color = accent.withValues(alpha: 0.22 * progress * opacity)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 13);
+    canvas.drawCircle(center, plate.width * 0.17, glow);
+    final bulb = Path()
+      ..moveTo(center.dx, center.dy - plate.width * 0.13)
+      ..cubicTo(
+        center.dx - plate.width * 0.12,
+        center.dy - plate.width * 0.13,
+        center.dx - plate.width * 0.15,
+        center.dy - plate.width * 0.01,
+        center.dx - plate.width * 0.07,
+        center.dy + plate.width * 0.07,
+      )
+      ..lineTo(center.dx - plate.width * 0.05, center.dy + plate.width * 0.13)
+      ..lineTo(center.dx + plate.width * 0.05, center.dy + plate.width * 0.13)
+      ..lineTo(center.dx + plate.width * 0.07, center.dy + plate.width * 0.07)
+      ..cubicTo(
+        center.dx + plate.width * 0.15,
+        center.dy - plate.width * 0.01,
+        center.dx + plate.width * 0.12,
+        center.dy - plate.width * 0.13,
+        center.dx,
+        center.dy - plate.width * 0.13,
+      )
+      ..close();
+    canvas.drawPath(
+      bulb,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            Color.lerp(Colors.white, const Color(0xFFFFC86B), progress)!,
+            const Color(0xFFE0E5E4),
+          ],
+        ).createShader(Rect.fromCircle(center: center, radius: plate.width * 0.16)),
+    );
+    final base = Rect.fromCenter(
+      center: center.translate(0, plate.width * 0.145),
+      width: plate.width * 0.11,
+      height: plate.width * 0.07,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(base, const Radius.circular(3)),
+      Paint()..color = const Color(0xFF8F9696).withValues(alpha: opacity),
+    );
+    for (var i = 0; i < 2; i++) {
+      final y = base.top + (i * base.height * 0.45) + 2;
+      canvas.drawLine(
+        Offset(base.left + 2, y),
+        Offset(base.right - 2, y),
+        Paint()
+          ..color = const Color(0xFFE7EBEA).withValues(alpha: opacity)
+          ..strokeWidth = 1,
+      );
+    }
+  }
+
+  void _paintLedStrip(Canvas canvas, Rect plate, double opacity) {
+    final body = RRect.fromRectAndRadius(
+      plate.deflate(plate.width * 0.18),
+      const Radius.circular(10),
+    );
+    canvas.drawRRect(body, Paint()..color = const Color(0xFF2E3839));
+    canvas.drawRRect(
+      body.deflate(5),
+      Paint()
+        ..color = progress > 0.45
+            ? const Color(0xFFFFC86B).withValues(alpha: opacity)
+            : const Color(0xFFB8C1C0).withValues(alpha: opacity),
+    );
+    for (var i = 0; i < 6; i++) {
+      final x = body.left + 13 + i * (body.width - 26) / 5;
+      canvas.drawCircle(
+        Offset(x, body.center.dy),
+        3,
+        Paint()
+          ..color = progress > 0.45
+              ? Colors.white.withValues(alpha: 0.9 * opacity)
+              : const Color(0xFF7D8887).withValues(alpha: opacity),
+      );
+    }
+  }
+
+  void _paintFishTank(Canvas canvas, Rect plate, double opacity) {
+    final tank = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: plate.center,
+        width: plate.width * 0.62,
+        height: plate.height * 0.63,
+      ),
+      const Radius.circular(7),
+    );
+    canvas.drawRRect(tank, Paint()..color = const Color(0xFFE8F5F4));
+    final water = Rect.fromLTRB(
+      tank.left + 2,
+      tank.top + tank.height * 0.44,
+      tank.right - 2,
+      tank.bottom - 2,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(water, const Radius.circular(5)),
+      Paint()
+        ..color = const Color(0xFF5AAEB5).withValues(alpha: 0.58 * opacity),
+    );
+    final plant = Paint()
+      ..color = const Color(0xFF6E9C70).withValues(alpha: opacity)
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(tank.left + 18, tank.bottom - 5), Offset(tank.left + 22, tank.top + 26), plant);
+    canvas.drawLine(Offset(tank.left + 22, tank.top + 30), Offset(tank.left + 31, tank.top + 20), plant);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(tank.right - 22, tank.top + tank.height * 0.58),
+        width: 18,
+        height: 9,
+      ),
+      Paint()..color = progress > 0.45 ? const Color(0xFFFFB36B) : const Color(0xFF9DA9A8),
+    );
+    canvas.drawCircle(
+      Offset(tank.right - 13, tank.top + tank.height * 0.58),
+      2,
+      Paint()..color = const Color(0xFFEAF8F7),
+    );
+  }
+
+  void _paintFan(Canvas canvas, Rect plate, double opacity) {
+    final center = plate.center;
+    final radius = plate.height * 0.28;
+    canvas.drawCircle(center, radius + 5, Paint()..color = const Color(0xFFEEF2F1));
+    canvas.drawCircle(
+      center,
+      radius + 5,
+      Paint()
+        ..color = const Color(0xFF9AA3A2).withValues(alpha: opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(progress * math.pi * 0.12);
+    final blade = Paint()..color = const Color(0xFFB8C1C0).withValues(alpha: opacity);
+    for (var i = 0; i < 4; i++) {
+      canvas.rotate(math.pi / 2);
+      final path = Path()
+        ..moveTo(0, -5)
+        ..quadraticBezierTo(radius * 0.65, -radius * 0.55, radius * 0.9, -radius * 0.1)
+        ..quadraticBezierTo(radius * 0.46, radius * 0.08, 0, 5)
+        ..close();
+      canvas.drawPath(path, blade);
+    }
+    canvas.restore();
+    canvas.drawCircle(center, 7, Paint()..color = progress > 0.45 ? accent : const Color(0xFF828B8A));
+  }
+
+  void _paintMultiPlug(Canvas canvas, Rect plate, double opacity) {
+    final body = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: plate.center, width: plate.width * 0.68, height: plate.height * 0.42),
+      const Radius.circular(10),
+    );
+    canvas.drawRRect(body, Paint()..color = const Color(0xFFF9FAF9));
+    canvas.drawRRect(
+      body,
+      Paint()
+        ..color = const Color(0xFF9FA7A6).withValues(alpha: opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    for (var i = 0; i < 3; i++) {
+      final x = body.left + body.width * (0.2 + i * 0.3);
+      _paintSocketHoles(canvas, Offset(x, body.center.dy), plate.width * 0.028, opacity);
+    }
+    canvas.drawCircle(
+      Offset(body.right - 11, body.top + 10),
+      3,
+      Paint()..color = progress > 0.45 ? accent : const Color(0xFF8B9392),
+    );
+  }
+
+  void _paintTv(Canvas canvas, Rect plate, double opacity) {
+    final screen = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: plate.center.translate(0, -4), width: plate.width * 0.7, height: plate.height * 0.56),
+      const Radius.circular(5),
+    );
+    canvas.drawRRect(screen, Paint()..color = const Color(0xFF202A2B));
+    canvas.drawRRect(
+      screen,
+      Paint()
+        ..color = const Color(0xFF818B8A).withValues(alpha: opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    canvas.drawCircle(
+      screen.center,
+      10,
+      Paint()..color = progress > 0.45 ? const Color(0xFF5AAEB5).withValues(alpha: 0.8) : const Color(0xFF394647),
+    );
+    canvas.drawLine(Offset(screen.center.dx, screen.bottom), plate.center.translate(0, plate.height * 0.28), Paint()..color = const Color(0xFF7E8887)..strokeWidth = 3);
+    canvas.drawLine(Offset(plate.center.dx - 20, plate.bottom - plate.height * 0.16), Offset(plate.center.dx + 20, plate.bottom - plate.height * 0.16), Paint()..color = const Color(0xFF7E8887)..strokeWidth = 3);
+  }
+
+  void _paintRouter(Canvas canvas, Rect plate, double opacity) {
+    final body = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: plate.center.translate(0, 8), width: plate.width * 0.62, height: plate.height * 0.25),
+      const Radius.circular(8),
+    );
+    canvas.drawRRect(body, Paint()..color = const Color(0xFFF4F7F6));
+    canvas.drawRRect(body, Paint()..color = const Color(0xFF9BA4A3).withValues(alpha: opacity)..style = PaintingStyle.stroke..strokeWidth = 2);
+    for (var i = 0; i < 4; i++) {
+      canvas.drawCircle(Offset(body.left + 16 + i * 12, body.center.dy), 2.5, Paint()..color = progress > 0.45 ? accent : const Color(0xFF8B9392));
+    }
+    final antenna = Paint()..color = const Color(0xFF7B8584).withValues(alpha: opacity)..strokeWidth = 3..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(body.left + 14, body.top + 2), Offset(body.left + 3, body.top - 28), antenna);
+    canvas.drawLine(Offset(body.right - 14, body.top + 2), Offset(body.right - 3, body.top - 28), antenna);
+  }
+
+  void _paintAppliance(Canvas canvas, Rect plate, double opacity) {
+    final body = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: plate.center, width: plate.width * 0.52, height: plate.height * 0.58),
+      const Radius.circular(12),
+    );
+    canvas.drawRRect(body, Paint()..color = const Color(0xFFF5F7F6));
+    canvas.drawRRect(body, Paint()..color = const Color(0xFF9BA4A3).withValues(alpha: opacity)..style = PaintingStyle.stroke..strokeWidth = 2);
+    canvas.drawCircle(Offset(body.center.dx, body.top + 22), 8, Paint()..color = const Color(0xFF8A9392));
+    canvas.drawLine(Offset(body.left + 15, body.bottom - 20), Offset(body.right - 15, body.bottom - 20), Paint()..color = progress > 0.45 ? accent : const Color(0xFF9DA5A4)..strokeWidth = 4);
+  }
+
+  @override
+  bool shouldRepaint(covariant _DevicePainter oldDelegate) =>
+      oldDelegate.state != state ||
+      oldDelegate.progress != progress ||
+      oldDelegate.kind != kind ||
+      oldDelegate.gangCount != gangCount ||
+      oldDelegate.pressed != pressed;
+}

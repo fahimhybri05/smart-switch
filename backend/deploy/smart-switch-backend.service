@@ -1,0 +1,33 @@
+[Unit]
+Description=Smart Switch backend (Node/Express/ws)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/html/smart-switch/backend
+EnvironmentFile=/var/www/html/smart-switch/backend/.env
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=2
+User=fahim
+
+# journald captures stdout/stderr automatically (with timestamps) — view
+# with: journalctl -u smart-switch-backend -f
+StandardOutput=journal
+StandardError=journal
+
+# Graceful shutdown: server.js handles SIGTERM itself (closes WS clients +
+# the DB pool before exiting) — give it real time before systemd escalates
+# to SIGKILL.
+TimeoutStopSec=15
+
+# Light sandboxing — this process only needs its own directory and the
+# network, nothing else on the system.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

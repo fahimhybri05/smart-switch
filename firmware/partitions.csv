@@ -1,0 +1,12 @@
+# Smart Switch — partition table (scaffold, dual-OTA-ready)
+# No `factory` slot: bootloader boots ota_0 by default when otadata is blank
+# (bootloader_utility.c: "No factory image, trying OTA 0" — verified in this
+# IDF checkout). Budget: ESP32, 4MB flash (CONFIG_ESPTOOLPY_FLASHSIZE_4MB).
+#
+# Name,     Type, SubType,  Offset,  Size,   Flags
+nvs,        data, nvs,      ,        0x6000,
+otadata,    data, ota,      ,        0x2000,
+phy_init,   data, phy,      ,        0x1000,
+ota_0,      app,  ota_0,    ,        1536K,
+ota_1,      app,  ota_1,    ,        1536K,
+storage,    data, littlefs, ,        256K,

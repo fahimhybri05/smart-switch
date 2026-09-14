@@ -1,0 +1,9 @@
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+*.pyc
+
+# OTA signing private key must never be committed (see components/ota/README.md).
+ota_signing_key.pem
+*.key

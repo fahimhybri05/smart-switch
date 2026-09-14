@@ -1,0 +1,76 @@
+menu "Smart Switch Reference Board"
+
+    config SS_CHANNEL_COUNT
+        int "Number of relay channels on this reference board"
+        range 1 6
+        default 6
+        help
+            Fixed target: 6-channel GPIO-direct reference board. No I2C
+            expander tier — this board never exceeds 6 channels.
+
+    config SS_RELAY_ACTIVE_LOW
+        bool "Relay outputs are active-low"
+        default y
+        help
+            Most opto-isolated relay modules (spec §11 BOM) energize the
+            relay when the GPIO is driven LOW.
+
+    config SS_RELAY_CH0_GPIO
+        int "Relay channel 0 GPIO"
+        default 16
+
+    config SS_RELAY_CH1_GPIO
+        int "Relay channel 1 GPIO"
+        default 17
+
+    config SS_RELAY_CH2_GPIO
+        int "Relay channel 2 GPIO"
+        default 18
+
+    config SS_RELAY_CH3_GPIO
+        int "Relay channel 3 GPIO"
+        default 19
+
+    config SS_RELAY_CH4_GPIO
+        int "Relay channel 4 GPIO"
+        default 25
+
+    config SS_RELAY_CH5_GPIO
+        int "Relay channel 5 GPIO"
+        default 26
+
+    config SS_I2C_SDA_GPIO
+        int "I2C SDA GPIO (DS3231 RTC)"
+        default 21
+
+    config SS_I2C_SCL_GPIO
+        int "I2C SCL GPIO (DS3231 RTC)"
+        default 22
+
+    config SS_BOOT_BUTTON_GPIO
+        int "BOOT button GPIO (short hold = network reset, long = factory reset, spec §5)"
+        default 0
+
+    config SS_BOOT_SHORT_HOLD_MS
+        int "BOOT button short-hold threshold (ms) — network reset only"
+        default 5000
+
+    config SS_BOOT_LONG_HOLD_MS
+        int "BOOT button long-hold threshold (ms) — full factory reset"
+        default 12000
+
+    config SS_STATUS_LED_GPIO
+        int "Status LED GPIO"
+        default 2
+
+    config SS_CLOUD_WS_URL
+        string "Cloud backend WebSocket URL (device tunnel)"
+        default "ws://192.168.100.143:3000/device"
+        help
+            Single self-hosted backend — no multi-tenant flexibility
+            needed, so this is Kconfig-hardcoded per build rather than
+            runtime-configurable. Use wss:// once the backend is behind
+            TLS. Path must be the device tunnel endpoint, not /ws (that's
+            the app/dashboard client endpoint).
+
+endmenu
