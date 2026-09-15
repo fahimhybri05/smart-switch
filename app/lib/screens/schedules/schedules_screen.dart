@@ -8,7 +8,7 @@ import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
-import '../shared/empty_devices_view.dart';
+import '../shared/device_sync_gate.dart';
 import '../shared/empty_state_view.dart';
 import '../shared/error_view.dart';
 import '../shared/skeleton_loader.dart';
@@ -27,8 +27,9 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
   Widget build(BuildContext context) {
     final devices = ref.watch(knownDevicesProvider);
 
-    if (devices.isEmpty) {
-      return const Scaffold(body: EmptyDevicesView());
+    final deviceGate = buildDeviceEmptyOrLoadingState(ref, devices);
+    if (deviceGate != null) {
+      return Scaffold(body: deviceGate);
     }
 
     if (_selected == null ||

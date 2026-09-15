@@ -7,7 +7,7 @@ import '../../models/local/known_device.dart';
 import '../../models/local/smart_scene.dart';
 import '../../providers/service_providers.dart';
 import '../../theme/spacing.dart';
-import '../shared/empty_devices_view.dart';
+import '../shared/device_sync_gate.dart';
 import '../shared/empty_state_view.dart';
 
 class ScenesScreen extends ConsumerWidget {
@@ -17,8 +17,9 @@ class ScenesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final devices = ref.watch(knownDevicesProvider);
     final scenes = ref.watch(scenesProvider);
-    if (devices.isEmpty) {
-      return const Scaffold(body: EmptyDevicesView());
+    final deviceGate = buildDeviceEmptyOrLoadingState(ref, devices);
+    if (deviceGate != null) {
+      return Scaffold(body: deviceGate);
     }
 
     return Scaffold(

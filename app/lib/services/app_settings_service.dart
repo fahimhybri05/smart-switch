@@ -4,7 +4,7 @@ import 'package:hive_ce_flutter/hive_ce_flutter.dart';
 const _boxName = 'app_settings';
 const _themeModeKey = 'theme_mode';
 const _backendUrlKey = 'backend_url';
-const _defaultBackendUrl = 'http://192.168.100.143:3000';
+const _defaultBackendUrl = 'https://api.smart-switch.shop';
 
 /// Local, device-only app preferences (spec: visual overhaul pass) — today
 /// just the theme mode. Same open/init pattern as

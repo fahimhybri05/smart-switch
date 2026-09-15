@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import { hashDeviceSecret } from '../auth/deviceSecret.js';
+import { getHouseholdDevicesSnapshot } from '../db/devices.js';
 import { pool } from '../db/pool.js';
 import { requireAuth } from '../middleware/auth.js';
 import { attachHouseholds, isHouseholdMember, isHouseholdOwner } from '../middleware/household.js';
@@ -82,28 +83,8 @@ devicesRouter.post('/claim', async (req, res) => {
 
 devicesRouter.get('/', async (req, res) => {
   const ids = [...req.householdRoles.keys()].map(Number);
-  if (ids.length === 0) {
-    return res.json({ devices: [] });
-  }
-  const { rows } = await pool.query(
-    `SELECT d.device_id, d.friendly_name, d.is_online, d.last_seen_at,
-            COALESCE(
-              json_agg(
-                json_build_object(
-                  'channelIdx', c.channel_idx, 'name', c.name,
-                  'zone', c.zone, 'state', c.state, 'updatedAt', c.updated_at
-                ) ORDER BY c.channel_idx
-              ) FILTER (WHERE c.channel_idx IS NOT NULL),
-              '[]'
-            ) AS channels
-     FROM devices d
-     LEFT JOIN cached_channel_state c ON c.device_id = d.device_id
-     WHERE d.household_id = ANY($1::bigint[])
-     GROUP BY d.device_id, d.friendly_name, d.is_online, d.last_seen_at
-     ORDER BY d.device_id`,
-    [ids],
-  );
-  res.json({ devices: rows });
+  const devices = await getHouseholdDevicesSnapshot(ids);
+  res.json({ devices });
 });
 
 const renameSchema = z.object({

@@ -69,7 +69,7 @@ static const int8_t SS_RELAY_GPIO[SS_CHANNEL_COUNT] = {
 // placeholder value caused every local LAN request to randomly stall for
 // seconds, which read as "the app is slow" — it wasn't the app, or even
 // really "the firmware", it was this pointed at nothing reachable.
-#define SS_CLOUD_WS_HOST "192.168.100.143"
-#define SS_CLOUD_WS_PORT 3000
+#define SS_CLOUD_WS_HOST "api.smart-switch.shop"
+#define SS_CLOUD_WS_PORT 443
 #define SS_CLOUD_WS_PATH "/device"
-#define SS_CLOUD_WS_USE_TLS false
+#define SS_CLOUD_WS_USE_TLS true

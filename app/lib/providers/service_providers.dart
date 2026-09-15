@@ -165,7 +165,16 @@ class AuthNotifier extends Notifier<AuthState> {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
     );
-    unawaited(syncClaimedDevicesFromBackend(ref));
+    // Chained (not run in parallel) so the timezone push also covers any
+    // device this login just discovered via cloud sync (e.g. claimed from
+    // another phone) — not just devices already known on this one. Still
+    // fully unawaited overall: never blocks the login screen from
+    // returning. See pushTimezoneToKnownDevices's doc comment / Task D.
+    unawaited(
+      syncClaimedDevicesFromBackend(
+        ref,
+      ).then((_) => pushTimezoneToKnownDevices(ref)),
+    );
     unawaited(ref.read(householdsProvider.notifier).refresh());
     unawaited(ref.read(householdInvitesProvider.notifier).refresh());
   }
@@ -366,6 +375,44 @@ final knownDevicesProvider =
       KnownDevicesNotifier.new,
     );
 
+/// Tracks the outcome of the most recent [syncClaimedDevicesFromBackend]
+/// call — `loading` while a real backend sync is in flight, `error` if it
+/// failed, `data(null)` once one has completed successfully (this also
+/// covers "never synced yet" for a logged-out user / no backend configured
+/// — that's not an error, just nothing to report). [knownDevicesProvider]
+/// on its own is a plain `List<KnownDevice>` with no loading/error
+/// distinction, which is what let "still loading," "fetch failed," and
+/// "genuinely zero devices" collapse into the same false-empty UI (see
+/// screens/shared/device_sync_gate.dart, which is what actually reads this).
+class DeviceSyncNotifier extends Notifier<AsyncValue<void>> {
+  @override
+  AsyncValue<void> build() => const AsyncValue.data(null);
+
+  /// Sets state to `loading`, runs [task], and captures its outcome (data
+  /// or error) into state via [AsyncValue.guard] — never rethrows past
+  /// itself, the resulting state is the only place the outcome is
+  /// observable from.
+  Future<void> run(Future<void> Function() task) async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(task);
+  }
+
+  /// Re-runs the real backend sync — used by the gate's retry affordance.
+  /// Deliberately NOT [refreshAllDevices], which only re-polls devices
+  /// already known locally and can't recover from "never synced in the
+  /// first place." Uses this Notifier's own `ref` (rather than taking one
+  /// as a parameter) since callers here are widgets holding a `WidgetRef`
+  /// — an unrelated type from the `Ref` this file's internals use (see
+  /// [ensureFreshAccessToken]'s doc comment above for the same
+  /// Riverpod-3-specific gotcha).
+  Future<void> retry() => run(() => _doSyncClaimedDevicesFromBackend(ref));
+}
+
+final deviceSyncStatusProvider =
+    NotifierProvider<DeviceSyncNotifier, AsyncValue<void>>(
+      DeviceSyncNotifier.new,
+    );
+
 /// One-shot kickoff for `main.dart`'s bootstrap, which only has the root
 /// `ProviderContainer` (no widget tree yet, so no real `Ref`) — reading
 /// this provider once hands `syncClaimedDevicesFromBackend` a genuine
@@ -385,45 +432,130 @@ final startupDeviceSyncProvider = Provider<void>((ref) {
 /// [activeDeviceApiClientProvider] until this phone discovers it on the
 /// LAN); an already-known device only gets its `friendlyName` refreshed
 /// (propagates a rename made elsewhere), never its local IP/hostname.
-/// Best-effort: never throws past itself, since this must never block
-/// login or app startup. See docs/plan.md's account-wide sync section.
-Future<void> syncClaimedDevicesFromBackend(Ref ref) async {
+/// Best-effort in the sense that it never blocks login/app startup (always
+/// called `unawaited`) — but unlike before, a failure now propagates into
+/// [deviceSyncStatusProvider]'s `error` state instead of being swallowed,
+/// so the UI (screens/shared/device_sync_gate.dart) can actually react to
+/// it. See docs/plan.md's account-wide sync section.
+Future<void> syncClaimedDevicesFromBackend(Ref ref) {
+  return ref
+      .read(deviceSyncStatusProvider.notifier)
+      .run(() => _doSyncClaimedDevicesFromBackend(ref));
+}
+
+/// The actual sync logic — unchanged from before other than the shorter
+/// timeout and no-longer-swallowed errors (see [syncClaimedDevicesFromBackend]
+/// and [DeviceSyncNotifier] above, which is what now catches/reports the
+/// outcome). A device new to this phone is added with no local IP yet
+/// (routed through the cloud relay via [activeDeviceApiClientProvider]
+/// until this phone discovers it on the LAN); an already-known device only
+/// gets its `friendlyName` refreshed (propagates a rename made elsewhere),
+/// never its local IP/hostname.
+Future<void> _doSyncClaimedDevicesFromBackend(Ref ref) async {
   final backendUrl = ref.read(backendUrlProvider);
   if (ref.read(authProvider) == null || backendUrl == null) {
     return;
   }
   try {
-    final accessToken = await ensureFreshAccessTokenForNotifier(ref);
-    final cloudDevices = await BackendDevicesClient(
-      baseUrl: backendUrl,
-      accessToken: accessToken,
-    ).list();
-
-    final notifier = ref.read(knownDevicesProvider.notifier);
-    final known = ref.read(knownDevicesProvider);
-    for (final cloudDevice in cloudDevices) {
-      final existing = known.where((d) => d.deviceId == cloudDevice.deviceId);
-      if (existing.isEmpty) {
-        await notifier.upsert(
-          KnownDevice(
-            deviceId: cloudDevice.deviceId,
-            mdnsHostname: null,
-            lastKnownIp: null,
-            friendlyName: cloudDevice.friendlyName,
-          ),
-        );
-      } else if (existing.first.friendlyName != cloudDevice.friendlyName) {
-        await notifier.upsert(
-          existing.first.copyWith(friendlyName: cloudDevice.friendlyName),
-        );
-      }
-    }
+    await _fetchAndMergeClaimedDevices(ref, backendUrl)
+        // This opportunistic path is called unawaited from login/boot —
+        // shrink the worst case (token refresh + device list, ~8s each,
+        // sequential — up to ~16s) so a slow/unreachable backend fails
+        // fast into deviceSyncStatusProvider's error state instead of
+        // leaving the UI in a long false-empty-looking limbo. Other,
+        // explicit user-initiated calls elsewhere keep their own 8s
+        // timeouts unchanged.
+        .timeout(const Duration(seconds: 6));
   } catch (e, st) {
-    // Best-effort by design (must never block login/startup — see doc
-    // comment above), but silent-forever made this exact class of bug
-    // undiagnosable from a real device. `flutter logs`/`adb logcat` (or
-    // Xcode's console) will show this line if the sync is failing.
+    // Still never swallowed silently forever — `flutter logs`/`adb
+    // logcat` (or Xcode's console) shows this line, but the exception
+    // also propagates (rethrow) so DeviceSyncNotifier.run's
+    // AsyncValue.guard captures it into deviceSyncStatusProvider.
     debugPrint('syncClaimedDevicesFromBackend failed: $e\n$st');
+    rethrow;
+  }
+}
+
+Future<void> _fetchAndMergeClaimedDevices(Ref ref, String backendUrl) async {
+  final accessToken = await ensureFreshAccessTokenForNotifier(ref);
+  final cloudDevices = await BackendDevicesClient(
+    baseUrl: backendUrl,
+    accessToken: accessToken,
+  ).list();
+
+  final notifier = ref.read(knownDevicesProvider.notifier);
+  final known = ref.read(knownDevicesProvider);
+  for (final cloudDevice in cloudDevices) {
+    final existing = known.where((d) => d.deviceId == cloudDevice.deviceId);
+    if (existing.isEmpty) {
+      await notifier.upsert(
+        KnownDevice(
+          deviceId: cloudDevice.deviceId,
+          mdnsHostname: null,
+          lastKnownIp: null,
+          friendlyName: cloudDevice.friendlyName,
+        ),
+      );
+    } else if (existing.first.friendlyName != cloudDevice.friendlyName) {
+      await notifier.upsert(
+        existing.first.copyWith(friendlyName: cloudDevice.friendlyName),
+      );
+    }
+  }
+}
+
+/// DST fix (Task D, docs/plan.md): re-pushes this phone's current UTC
+/// offset to every device it can currently reach, since a device only
+/// learns its offset from whichever phone last told it (at pairing time,
+/// or here) — it never recomputes DST on its own. Called on every
+/// successful login (see [AuthNotifier._persist], via this `Ref` version)
+/// and on app foreground (see `app.dart`'s `WidgetsBindingObserver`, via
+/// [pushTimezoneToKnownDevicesFromWidget] — `WidgetRef` and `Ref` are
+/// unrelated types in Riverpod 3, see [ensureFreshAccessToken]'s doc
+/// comment above for the same split). Best-effort and fire-and-forget,
+/// same discipline as [syncClaimedDevicesFromBackend]: never blocks UI, a
+/// single unreachable device's failure never blocks the rest. Skips a
+/// device with no reachable transport at all (never seen on this LAN
+/// *and* no backend/cloud relay configured) — nothing to push to.
+///
+/// Known residual limitation (documented, not fixed here): still wrong if
+/// the app stays unopened across the exact DST transition moment, and
+/// ambiguous in a multi-user household if members are in different zones —
+/// acceptable tradeoff, not silently hidden.
+Future<void> pushTimezoneToKnownDevices(Ref ref) => _pushTimezoneToDevices(
+  knownDevices: ref.read(knownDevicesProvider),
+  hasCloud: ref.read(backendWsClientProvider) != null,
+  clientFor: (device) => ref.read(activeDeviceApiClientProvider(device)),
+);
+
+/// See [pushTimezoneToKnownDevices] — same logic, for callers (widgets)
+/// that only have a `WidgetRef`.
+Future<void> pushTimezoneToKnownDevicesFromWidget(WidgetRef ref) =>
+    _pushTimezoneToDevices(
+      knownDevices: ref.read(knownDevicesProvider),
+      hasCloud: ref.read(backendWsClientProvider) != null,
+      clientFor: (device) => ref.read(activeDeviceApiClientProvider(device)),
+    );
+
+Future<void> _pushTimezoneToDevices({
+  required List<KnownDevice> knownDevices,
+  required bool hasCloud,
+  required DeviceApiClient Function(KnownDevice) clientFor,
+}) async {
+  if (knownDevices.isEmpty) {
+    return;
+  }
+  final offsetMinutes = DateTime.now().timeZoneOffset.inMinutes;
+  for (final device in knownDevices) {
+    if (baseUrlFor(device) == null && !hasCloud) {
+      continue; // no LAN address known, no cloud relay either — unreachable
+    }
+    try {
+      await clientFor(device).setTimezone(offsetMinutes);
+    } catch (_) {
+      // Best-effort — one unreachable/failing device must never block the
+      // rest, mirrors syncClaimedDevicesFromBackend's discipline.
+    }
   }
 }
 
@@ -698,16 +830,45 @@ final deviceConfigProvider = FutureProvider.autoDispose
 /// long as some screen is watching it — autoDispose cancels the loop the
 /// instant nothing does, satisfying "only poll the zone currently on screen"
 /// without any manual start/stop wiring in the screens themselves.
+const _channelPollIntervalLocal = Duration(seconds: 2);
+const _channelPollIntervalCloudBackoff = Duration(seconds: 6);
+
+/// Consecutive cloud-served polls (see
+/// [FallbackDeviceTransport.lastServedByCloud]) before the poll interval
+/// widens from 2s to ~6s — a couple of cloud polls in a row is a decent
+/// signal the phone is genuinely off-LAN right now, not just one flaky LAN
+/// hiccup.
+const _cloudBackoffThreshold = 3;
+
 final channelStatesProvider = StreamProvider.autoDispose
     .family<List<ChannelState>, KnownDevice>((ref, device) async* {
       final client = ref.watch(activeDeviceApiClientProvider(device));
+      // Only a FallbackDeviceTransport can ever report "served by cloud" —
+      // a cloud-only or local-only client (see activeDeviceApiClientProvider)
+      // has no such signal, so the backoff below simply never engages for
+      // those (consecutiveCloudPolls stays 0 forever), which is correct:
+      // there's no "local" to snap back to for a cloud-only client anyway.
+      final transport = client.transport;
+      var consecutiveCloudPolls = 0;
       while (true) {
         try {
           yield await client.getChannels();
+          final servedByCloud = transport is FallbackDeviceTransport
+              ? transport.lastServedByCloud
+              : null;
+          if (servedByCloud == true) {
+            consecutiveCloudPolls++;
+          } else if (servedByCloud == false) {
+            consecutiveCloudPolls = 0;
+          }
         } catch (_) {
           yield const [];
         }
-        await Future.delayed(const Duration(seconds: 2));
+        await Future.delayed(
+          consecutiveCloudPolls >= _cloudBackoffThreshold
+              ? _channelPollIntervalCloudBackoff
+              : _channelPollIntervalLocal,
+        );
       }
     });
 

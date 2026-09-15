@@ -6,7 +6,7 @@ import '../../models/local/automation.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../theme/spacing.dart';
-import '../shared/empty_devices_view.dart';
+import '../shared/device_sync_gate.dart';
 import '../shared/empty_state_view.dart';
 
 const _dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -93,8 +93,9 @@ class AutomationsScreen extends ConsumerWidget {
     final households = ref.watch(householdsProvider);
     final isOwnerSomewhere = households.any((h) => h.isOwner);
 
-    if (devices.isEmpty) {
-      return const Scaffold(body: EmptyDevicesView());
+    final deviceGate = buildDeviceEmptyOrLoadingState(ref, devices);
+    if (deviceGate != null) {
+      return Scaffold(body: deviceGate);
     }
 
     return Scaffold(

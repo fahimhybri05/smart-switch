@@ -10,7 +10,7 @@ import '../../providers/service_providers.dart';
 import '../../services/zone_aggregation_service.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
-import '../shared/empty_devices_view.dart';
+import '../shared/device_sync_gate.dart';
 import '../shared/empty_state_view.dart';
 import '../shared/skeleton_loader.dart';
 import '../shared/switch_tile.dart';
@@ -22,8 +22,9 @@ class ZonesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final devices = ref.watch(knownDevicesProvider);
 
-    if (devices.isEmpty) {
-      return const Scaffold(body: EmptyDevicesView());
+    final deviceGate = buildDeviceEmptyOrLoadingState(ref, devices);
+    if (deviceGate != null) {
+      return Scaffold(body: deviceGate);
     }
 
     final configs = <DeviceConfig>[];

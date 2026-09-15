@@ -10,7 +10,7 @@ import {
   authenticateClientUpgrade,
   handleClientConnection,
 } from './ws/clientServer.js';
-import { handleDeviceConnection } from './ws/deviceServer.js';
+import { handleDeviceConnection, startDeviceHeartbeat } from './ws/deviceServer.js';
 
 const app = createApp();
 const server = http.createServer(app);
@@ -52,12 +52,24 @@ server.on('upgrade', (req, socket, head) => {
   socket.destroy();
 });
 
+// Safe at cold start only: the in-memory registry (ws/registry.js) is
+// guaranteed empty right here — this process hasn't accepted any
+// connections yet, so no device can genuinely be online yet. Closes the
+// "stale is_online=true after an ungraceful crash" gap without racing a
+// real device's own reconnect.
+try {
+  await pool.query('UPDATE devices SET is_online = false WHERE is_online = true');
+} catch (err) {
+  console.error('startup reconciliation failed: could not reset stale is_online flags', err);
+}
+
 const port = process.env.PORT || 3000;
 server.listen(port, () => {
   console.log(`smart-switch-backend listening on :${port}`);
 });
 
 const stopAutomationScheduler = startAutomationScheduler();
+const deviceHeartbeatInterval = startDeviceHeartbeat();
 
 // Lets `systemctl restart`/`stop` (or a plain Ctrl-C) close cleanly instead
 // of yanking the DB pool and every open device/client WS out from under
@@ -69,6 +81,7 @@ function shutdown(signal) {
   shuttingDown = true;
   console.log(`${signal} received, shutting down`);
   stopAutomationScheduler();
+  clearInterval(deviceHeartbeatInterval);
 
   const forceExitTimer = setTimeout(() => {
     console.error('shutdown timed out, forcing exit');

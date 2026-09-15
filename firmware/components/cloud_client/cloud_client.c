@@ -4,8 +4,10 @@
 #include <string.h>
 
 #include "cJSON.h"
+#include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_websocket_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -198,10 +200,27 @@ static void cloud_client_task(void *arg)
 {
     provisioning_wait_wifi_ready(portMAX_DELAY);
 
+    // Randomized once per boot (not per reconnect attempt) so every device in
+    // the fleet doesn't retry in lockstep after a shared backend restart —
+    // just needs to differ device-to-device, not attempt-to-attempt.
+    uint32_t reconnect_ms = 4000 + (esp_random() % 5000);
+
     esp_websocket_client_config_t ws_cfg = {
         .uri = CONFIG_SS_CLOUD_WS_URL,
-        .reconnect_timeout_ms = 5000,
+        // wss:// needs an explicit cert-verification source — without this,
+        // esp-tls refuses the handshake even with
+        // CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y compiled in. Uses ESP-IDF's
+        // bundled public-CA root store, which covers Cloudflare Tunnel's
+        // edge certs same as any other public HTTPS host.
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .reconnect_timeout_ms = (int)reconnect_ms,
         .network_timeout_ms = 10000,
+        // Explicit heartbeat so a dead backend/NAT-dropped connection is
+        // detected well before any OS-level TCP timeout would notice.
+        .ping_interval_sec = 20,
+        .pingpong_timeout_sec = 50,
+        .keep_alive_enable = true,
+        .keep_alive_idle = 20,
     };
     s_client = esp_websocket_client_init(&ws_cfg);
     esp_websocket_register_events(s_client, WEBSOCKET_EVENT_ANY, websocket_event_handler, NULL);

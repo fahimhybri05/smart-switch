@@ -5,12 +5,26 @@ import { pool } from '../db/pool.js';
 import { takeAttribution } from './attribution.js';
 import {
   broadcastToHousehold,
+  getDeviceSockets,
   registerDevice,
   resolveDeviceResponse,
   unregisterDevice,
 } from './registry.js';
 
 const AUTH_TIMEOUT_MS = 5_000;
+const HEARTBEAT_INTERVAL_MS = 25_000;
+
+/** Marks `deviceId` online and returns its household, given a row already
+ * known to exist and whose secret already matched. Single unlocked
+ * statement — no held client checkout, no transaction — this is the hot
+ * path for the routine "already-claimed device reconnecting" case. */
+async function markExistingDeviceOnline(deviceId, householdId) {
+  await pool.query(
+    'UPDATE devices SET is_online = true, last_seen_at = now() WHERE device_id = $1',
+    [deviceId],
+  );
+  return { householdId };
+}
 
 /** Looks up (or trust-on-first-use creates) the device row, verifying the
  * presented secret against whatever hash is already stored. Mirrors
@@ -18,41 +32,53 @@ const AUTH_TIMEOUT_MS = 5_000;
  * or the claiming app connects/registers first. */
 async function authenticateDevice(deviceId, cloudSecret) {
   const secretHash = hashDeviceSecret(cloudSecret);
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const { rows } = await client.query(
-      'SELECT household_id, cloud_secret_hash FROM devices WHERE device_id = $1 FOR UPDATE',
-      [deviceId],
-    );
-    const existing = rows[0];
 
-    if (existing) {
-      if (existing.cloud_secret_hash !== secretHash) {
-        await client.query('ROLLBACK');
-        return null;
-      }
-      await client.query(
-        'UPDATE devices SET is_online = true, last_seen_at = now() WHERE device_id = $1',
-        [deviceId],
-      );
-      await client.query('COMMIT');
-      return { householdId: existing.household_id };
+  // Plain unlocked read first — this alone resolves the common case (row
+  // already exists) without ever taking a transaction or holding a
+  // checked-out client across the round trip.
+  const { rows } = await pool.query(
+    'SELECT household_id, cloud_secret_hash FROM devices WHERE device_id = $1',
+    [deviceId],
+  );
+  const existing = rows[0];
+
+  if (existing) {
+    if (existing.cloud_secret_hash !== secretHash) {
+      return null;
     }
-
-    await client.query(
-      `INSERT INTO devices (device_id, cloud_secret_hash, friendly_name, is_online, last_seen_at)
-       VALUES ($1, $2, $1, true, now())`,
-      [deviceId, secretHash],
-    );
-    await client.query('COMMIT');
-    return { householdId: null };
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
+    return markExistingDeviceOnline(deviceId, existing.household_id);
   }
+
+  // First-ever-connect (trust-on-first-use): two devices with the same
+  // never-before-seen deviceId could race here. Rather than holding a
+  // `BEGIN ... SELECT FOR UPDATE ... COMMIT` transaction across the whole
+  // auth exchange just to guard this rare path, a single atomic
+  // `INSERT ... ON CONFLICT DO NOTHING RETURNING` lets exactly one racer
+  // create the row — no duplicate-row risk, and the loser (if any) simply
+  // falls through to re-read and validate against whatever row won,
+  // identically to the "row already exists" branch above.
+  const inserted = await pool.query(
+    `INSERT INTO devices (device_id, cloud_secret_hash, friendly_name, is_online, last_seen_at)
+     VALUES ($1, $2, $1, true, now())
+     ON CONFLICT (device_id) DO NOTHING
+     RETURNING household_id`,
+    [deviceId, secretHash],
+  );
+  if (inserted.rows[0]) {
+    return { householdId: inserted.rows[0].household_id };
+  }
+
+  // Lost the race — some other connection (or a concurrent /claim) won.
+  // Re-read and validate exactly as the existing-row branch does.
+  const { rows: afterRace } = await pool.query(
+    'SELECT household_id, cloud_secret_hash FROM devices WHERE device_id = $1',
+    [deviceId],
+  );
+  const winner = afterRace[0];
+  if (!winner || winner.cloud_secret_hash !== secretHash) {
+    return null;
+  }
+  return markExistingDeviceOnline(deviceId, winner.household_id);
 }
 
 async function markOffline(deviceId) {
@@ -105,6 +131,7 @@ export function handleDeviceConnection(ws) {
         clearTimeout(authTimer);
         deviceId = msg.deviceId;
         authenticated = true;
+        ws.isAlive = true;
         registerDevice(deviceId, ws);
         console.log(`device connected: ${deviceId}`);
         if (result.householdId) {
@@ -161,6 +188,10 @@ export function handleDeviceConnection(ws) {
     }
   });
 
+  ws.on('pong', () => {
+    ws.isAlive = true;
+  });
+
   ws.on('close', (code, reason) => {
     clearTimeout(authTimer);
     if (deviceId) {
@@ -173,4 +204,33 @@ export function handleDeviceConnection(ws) {
       );
     }
   });
+}
+
+/**
+ * One heartbeat tick: any device socket that didn't answer the previous
+ * ping (`isAlive === false`) gets `terminate()`'d — this fires the same
+ * `close` handler above, which already does `unregisterDevice` +
+ * `markOffline`, so there's no separate cleanup path to keep in sync.
+ * Everything else gets pinged and flipped back to "not yet answered"
+ * until its `pong` handler proves otherwise. Exported separately (instead
+ * of only inline in `setInterval`) so it's directly unit-testable without
+ * needing to fake timers.
+ */
+export function runDeviceHeartbeatTick() {
+  for (const ws of getDeviceSockets()) {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}
+
+/**
+ * Starts the shared device-socket heartbeat interval. Returns the handle
+ * so callers (server.js) can `clearInterval` it on shutdown.
+ */
+export function startDeviceHeartbeat() {
+  return setInterval(runDeviceHeartbeatTick, HEARTBEAT_INTERVAL_MS);
 }

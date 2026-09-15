@@ -123,8 +123,18 @@ void cloudClientBegin() {
   } else {
     s_ws.begin(SS_CLOUD_WS_HOST, SS_CLOUD_WS_PORT, SS_CLOUD_WS_PATH);
   }
+  // Ping every 20s, allow 5s for a pong, disconnect (triggering the normal
+  // reconnect path) after 2 consecutive misses — lets this device notice a
+  // dead backend/NAT-dropped connection well before any OS-level timeout.
+  s_ws.enableHeartbeat(20000, 5000, 2);
   s_ws.onEvent(onWsEvent);
-  s_ws.setReconnectInterval(5000);
+  // Randomized once per boot (not per reconnect attempt) so every device in
+  // the fleet doesn't retry in lockstep after a shared backend restart —
+  // just needs to differ device-to-device. secureRandom() (hardware RNG,
+  // no seeding needed) is already this codebase's convention for
+  // randomness — see config_store.cpp's secret generation.
+  uint32_t reconnectMs = secureRandom(4000, 9000);
+  s_ws.setReconnectInterval(reconnectMs);
   s_started = true;
 }
 

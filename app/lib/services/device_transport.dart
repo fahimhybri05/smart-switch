@@ -179,6 +179,16 @@ class FallbackDeviceTransport implements DeviceTransport {
   final DeviceTransport local;
   final DeviceTransport? cloud;
 
+  /// Which path served the most recent successful [send] call — `false`
+  /// for [local], `true` for [cloud], `null` before any call has
+  /// succeeded. Lets a caller that polls repeatedly through the same
+  /// transport instance (see `channelStatesProvider` in
+  /// service_providers.dart) detect "phone is off-LAN, currently riding
+  /// the cloud relay" and back its poll rate off accordingly — this is the
+  /// only bit of extra state this class carries; `send`'s behavior itself
+  /// is unchanged.
+  bool? lastServedByCloud;
+
   @override
   Future<DeviceTransportResponse> send(
     String method,
@@ -186,13 +196,17 @@ class FallbackDeviceTransport implements DeviceTransport {
     Object? body,
   }) async {
     try {
-      return await local.send(method, path, body: body);
+      final resp = await local.send(method, path, body: body);
+      lastServedByCloud = false;
+      return resp;
     } catch (_) {
       final cloudTransport = cloud;
       if (cloudTransport == null) {
         rethrow;
       }
-      return cloudTransport.send(method, path, body: body);
+      final resp = await cloudTransport.send(method, path, body: body);
+      lastServedByCloud = true;
+      return resp;
     }
   }
 }

@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../theme/spacing.dart';
-import '../shared/empty_devices_view.dart';
+import '../shared/device_sync_gate.dart';
 import '../shared/error_view.dart';
 import '../shared/skeleton_loader.dart';
 import '../shared/switch_tile.dart';
@@ -16,8 +16,9 @@ class SwitchesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final devices = ref.watch(knownDevicesProvider);
 
-    if (devices.isEmpty) {
-      return const Scaffold(body: EmptyDevicesView());
+    final deviceGate = buildDeviceEmptyOrLoadingState(ref, devices);
+    if (deviceGate != null) {
+      return Scaffold(body: deviceGate);
     }
 
     return Scaffold(

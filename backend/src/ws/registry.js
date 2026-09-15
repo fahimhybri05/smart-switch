@@ -31,6 +31,12 @@ export function isDeviceOnline(deviceId) {
   return deviceSockets.has(deviceId);
 }
 
+/** Every currently-registered device WebSocket — used by the heartbeat
+ * interval in deviceServer.js to ping/terminate dead connections. */
+export function getDeviceSockets() {
+  return deviceSockets.values();
+}
+
 export function registerClient(userId, ws) {
   if (!clientSocketsByUser.has(userId)) {
     clientSocketsByUser.set(userId, new Set());

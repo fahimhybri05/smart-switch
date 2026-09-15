@@ -1,4 +1,6 @@
 import { verifyAccessToken } from '../auth/tokens.js';
+import { getHouseholdDevicesSnapshot } from '../db/devices.js';
+import { getUserHouseholdIds } from '../db/households.js';
 import { pool } from '../db/pool.js';
 import { noteExpectedStateChange } from './attribution.js';
 import { isDeviceOnline, registerClient, relayToDevice, unregisterClient } from './registry.js';
@@ -31,8 +33,26 @@ async function isOwnedByUser(deviceId, userId) {
   return rows.length > 0;
 }
 
+/** Sends the connecting user's current device list right away, so a
+ * WS-connected client has a baseline even if the REST `GET /devices` call
+ * (the other source of this data) is momentarily slow. Never allowed to
+ * throw/crash the connection — worst case, no snapshot arrives and the
+ * client falls back to REST-only, which is today's status quo anyway. */
+async function sendInitialSnapshot(ws, userId) {
+  try {
+    const householdIds = await getUserHouseholdIds(userId);
+    const devices = await getHouseholdDevicesSnapshot(householdIds);
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ event: 'snapshot', devices }));
+    }
+  } catch (err) {
+    console.error(`failed to send initial device snapshot to user ${userId}`, err);
+  }
+}
+
 export function handleClientConnection(ws, userId) {
   registerClient(userId, ws);
+  sendInitialSnapshot(ws, userId);
 
   ws.on('message', async (raw) => {
     let msg;

@@ -10,8 +10,8 @@ import '../../providers/service_providers.dart';
 import '../../routing/app_routes.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
+import '../shared/device_sync_gate.dart';
 import '../shared/device_tile.dart';
-import '../shared/empty_devices_view.dart';
 import '../shared/skeleton_loader.dart';
 
 /// The app's real landing screen — an at-a-glance dashboard (Google Home /
@@ -34,7 +34,8 @@ class HomeDashboardScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final devices = ref.watch(knownDevicesProvider);
 
-    if (devices.isEmpty) {
+    final deviceGate = buildDeviceEmptyOrLoadingState(ref, devices);
+    if (deviceGate != null) {
       return Scaffold(
         appBar: AppBar(
           title: Text(_greeting),
@@ -55,7 +56,7 @@ class HomeDashboardScreen extends ConsumerWidget {
         body: Column(
           children: [
             const _InviteBanner(),
-            const Expanded(child: EmptyDevicesView()),
+            Expanded(child: deviceGate),
           ],
         ),
         floatingActionButton:

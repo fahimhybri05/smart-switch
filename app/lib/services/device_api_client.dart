@@ -33,6 +33,14 @@ class DeviceApiClient {
 
   final DeviceTransport _transport;
 
+  /// Exposes the underlying transport — used by `channelStatesProvider`
+  /// (service_providers.dart) to detect whether polls are being served
+  /// locally or via cloud relay (see
+  /// [FallbackDeviceTransport.lastServedByCloud]) so it can back its poll
+  /// interval off while off-LAN. Not needed by any other caller — normal
+  /// device control should stick to the methods below.
+  DeviceTransport get transport => _transport;
+
   Future<Map<String, dynamic>> _decodeOrThrow(
     DeviceTransportResponse resp,
   ) async {

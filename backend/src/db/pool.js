@@ -15,4 +15,13 @@ const { Pool } = pg;
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  max: Number(process.env.DB_POOL_MAX) || 20,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
 });
+
+// A client sitting idle in the pool can still emit an 'error' (e.g. the
+// backend killed the connection). Without a listener here, that's an
+// unhandled 'error' event, which crashes the whole process — this just
+// logs it and lets the pool recycle the client.
+pool.on('error', (err) => console.error('unexpected pg pool error', err));
