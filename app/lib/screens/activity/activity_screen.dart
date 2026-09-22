@@ -5,7 +5,9 @@ import '../../models/local/activity_entry.dart';
 import '../../models/local/household.dart';
 import '../../providers/service_providers.dart';
 import '../../services/backend/backend_activity_client.dart';
+import '../../theme/app_theme.dart';
 import '../../theme/spacing.dart';
+import '../shared/error_view.dart';
 
 /// A simple paginated feed of every confirmed switch on/off event for a
 /// household (spec: "activity history requires persistent event storage").
@@ -138,7 +140,10 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
         child: _entries.isEmpty && _loading
             ? const Center(child: CircularProgressIndicator())
             : _entries.isEmpty && _error != null
-            ? Center(child: Text('Failed: $_error'))
+            ? ErrorView(
+                message: 'Could not load activity history: $_error',
+                onRetry: _refresh,
+              )
             : _entries.isEmpty
             ? const Center(child: Text('No activity yet.'))
             : NotificationListener<ScrollNotification>(
@@ -152,7 +157,8 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                 child: ListView.separated(
                   padding: const EdgeInsets.all(Spacing.md),
                   itemCount: _entries.length + (_hasMore ? 1 : 0),
-                  separatorBuilder: (_, _) => const SizedBox(height: Spacing.xs),
+                  separatorBuilder: (_, _) =>
+                      const SizedBox(height: Spacing.xs),
                   itemBuilder: (context, index) {
                     if (index >= _entries.length) {
                       return const Padding(
@@ -161,14 +167,51 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
                       );
                     }
                     final entry = _entries[index];
+                    final isOn = entry.state.toLowerCase() == 'on';
+                    final colorScheme = Theme.of(context).colorScheme;
+                    final live = context.panelColors.live;
+                    final accent = isOn ? live : colorScheme.onSurfaceVariant;
                     return Card(
                       child: ListTile(
-                        leading: Icon(_sourceIcon(entry.source)),
-                        title: Text(
-                          '${entry.deviceFriendlyName} · ch${entry.channelIdx} turned ${entry.state}',
+                        leading: Container(
+                          width: 36,
+                          height: 36,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: isOn
+                                ? live.withValues(alpha: 0.14)
+                                : colorScheme.surfaceContainerHigh,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            _sourceIcon(entry.source),
+                            size: 17,
+                            color: accent,
+                          ),
+                        ),
+                        title: RichText(
+                          text: TextSpan(
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(color: colorScheme.onSurface),
+                            children: [
+                              TextSpan(
+                                text:
+                                    '${entry.deviceFriendlyName} · ch${entry.channelIdx} turned ',
+                              ),
+                              TextSpan(
+                                text: entry.state.toUpperCase(),
+                                style: TextStyle(
+                                  color: accent,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                         subtitle: Text(
                           '${_sourceLabel(entry)} · ${entry.createdAt.toLocal()}',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: colorScheme.onSurfaceVariant),
                         ),
                       ),
                     );

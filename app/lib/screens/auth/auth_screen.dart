@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/service_providers.dart';
+import '../../theme/motion.dart';
 import '../../services/backend/backend_api_exception.dart';
+import '../../theme/app_theme.dart';
 import '../../theme/spacing.dart';
 
 final _emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
@@ -27,7 +30,32 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
   bool _submitting = false;
   bool _showPassword = false;
+  bool _rememberMe = true;
   String? _errorText;
+
+  @override
+  void initState() {
+    super.initState();
+    // Surface a forced-logout explanation (see
+    // AuthNotifier._doRefreshAccessToken /
+    // sessionExpiredMessageProvider) exactly once, the moment this screen
+    // mounts — a post-frame callback since showing a SnackBar needs a
+    // built Scaffold. Cleared right after being read so it doesn't
+    // reappear on a normal subsequent login/logout.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      final message = ref.read(sessionExpiredMessageProvider);
+      if (message == null) {
+        return;
+      }
+      ref.read(sessionExpiredMessageProvider.notifier).state = null;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    });
+  }
 
   @override
   void dispose() {
@@ -51,11 +79,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         await notifier.signup(
           _emailController.text.trim(),
           _passwordController.text,
+          rememberMe: _rememberMe,
         );
       } else {
         await notifier.login(
           _emailController.text.trim(),
           _passwordController.text,
+          rememberMe: _rememberMe,
         );
       }
       if (mounted) {
@@ -95,12 +125,15 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               passwordController: _passwordController,
               passwordFocusNode: _passwordFocusNode,
               showPassword: _showPassword,
+              rememberMe: _rememberMe,
               isSignup: _isSignup,
               isSubmitting: _submitting,
               errorText: _errorText,
               backendUrl: backendUrl,
               onTogglePassword: () =>
                   setState(() => _showPassword = !_showPassword),
+              onToggleRememberMe: (value) =>
+                  setState(() => _rememberMe = value),
               onSubmit: _submit,
               onToggleMode: () => setState(() {
                 _isSignup = !_isSignup;
@@ -120,12 +153,30 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _BrandHeader(
-                      compact: true,
-                      isSignup: _isSignup,
-                      colorScheme: colorScheme,
-                    ),
+                          compact: true,
+                          isSignup: _isSignup,
+                          colorScheme: colorScheme,
+                        )
+                        .animate()
+                        .fadeIn(duration: Motion.medium, curve: Motion.standard)
+                        .slideY(
+                          begin: -0.15,
+                          end: 0,
+                          duration: Motion.medium,
+                          curve: Motion.standard,
+                        ),
                     const SizedBox(height: Spacing.xl),
-                    form,
+                    Card(
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.all(Spacing.lg),
+                        child: form,
+                      ),
+                    ).animate().fadeIn(
+                      delay: Motion.fast,
+                      duration: Motion.medium,
+                      curve: Motion.standard,
+                    ),
                   ],
                 ),
               );
@@ -150,7 +201,18 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     child: Center(
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 440),
-                        child: form,
+                        child: form
+                            .animate()
+                            .fadeIn(
+                              duration: Motion.medium,
+                              curve: Motion.standard,
+                            )
+                            .slideX(
+                              begin: 0.05,
+                              end: 0,
+                              duration: Motion.medium,
+                              curve: Motion.standard,
+                            ),
                       ),
                     ),
                   ),
@@ -171,11 +233,13 @@ class _AuthForm extends StatelessWidget {
     required this.passwordController,
     required this.passwordFocusNode,
     required this.showPassword,
+    required this.rememberMe,
     required this.isSignup,
     required this.isSubmitting,
     required this.errorText,
     required this.backendUrl,
     required this.onTogglePassword,
+    required this.onToggleRememberMe,
     required this.onSubmit,
     required this.onToggleMode,
   });
@@ -185,11 +249,13 @@ class _AuthForm extends StatelessWidget {
   final TextEditingController passwordController;
   final FocusNode passwordFocusNode;
   final bool showPassword;
+  final bool rememberMe;
   final bool isSignup;
   final bool isSubmitting;
   final String? errorText;
   final String? backendUrl;
   final VoidCallback onTogglePassword;
+  final ValueChanged<bool> onToggleRememberMe;
   final VoidCallback onSubmit;
   final VoidCallback onToggleMode;
 
@@ -260,7 +326,17 @@ class _AuthForm extends StatelessWidget {
                 ? 'Use at least 8 characters'
                 : null,
           ),
-          const SizedBox(height: Spacing.lg),
+          if (!isSignup)
+            CheckboxListTile(
+              value: rememberMe,
+              onChanged: (value) => onToggleRememberMe(value ?? true),
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('Remember me'),
+              subtitle: const Text('Stay signed in on this device'),
+            ),
+          const SizedBox(height: Spacing.md),
           if (backendUrl != null)
             Row(
               children: [
@@ -350,9 +426,16 @@ class _BrandHeader extends StatelessWidget {
           decoration: BoxDecoration(
             color: colorScheme.primary,
             borderRadius: BorderRadius.circular(18),
+            boxShadow: [
+              BoxShadow(
+                color: colorScheme.primary.withValues(alpha: 0.35),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
           child: Icon(
-            Icons.hub_rounded,
+            Icons.bolt_rounded,
             color: colorScheme.onPrimary,
             size: compact ? 28 : 34,
           ),
@@ -362,10 +445,9 @@ class _BrandHeader extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'SMART SWITCH',
+              'Smart Switch',
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                letterSpacing: 1.6,
-                fontWeight: FontWeight.w800,
+                fontWeight: FontWeight.w700,
                 color: colorScheme.primary,
               ),
             ),
@@ -390,6 +472,7 @@ class _WelcomePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final panelColors = context.panelColors;
     return Container(
       height: double.infinity,
       padding: const EdgeInsets.all(Spacing.xl),
@@ -399,7 +482,7 @@ class _WelcomePanel extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: [
             colorScheme.primary,
-            isDark ? const Color(0xFF12383A) : const Color(0xFF005B60),
+            isDark ? panelColors.stage : panelColors.accentStrong,
           ],
         ),
       ),
@@ -446,11 +529,10 @@ class _WelcomePanel extends StatelessWidget {
           ),
           const Spacer(),
           Text(
-            'SMART HOME / 01',
+            'Smart Switch',
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
               color: colorScheme.onPrimary.withValues(alpha: 0.58),
-              letterSpacing: 1.4,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],

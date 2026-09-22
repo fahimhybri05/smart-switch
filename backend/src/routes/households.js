@@ -160,21 +160,32 @@ householdsRouter.delete('/:id/members/:userId', async (req, res) => {
   if (!Number.isInteger(id) || !isHouseholdOwner(req, id) || !Number.isInteger(userId)) {
     return res.status(404).json({ error: 'household not found' });
   }
+  // Atomic check-and-delete — the previous version read all members,
+  // computed ownerCount, and only then issued the DELETE as three separate
+  // unlocked queries, letting two concurrent removals both read
+  // ownerCount > 1, both pass the guard, and both delete, leaving zero
+  // owners. A single conditional statement closes that window: the delete
+  // only takes effect when the target isn't the household's sole owner.
   const { rows } = await pool.query(
-    'SELECT user_id, role FROM household_members WHERE household_id = $1',
-    [id],
+    `DELETE FROM household_members
+     WHERE household_id = $1 AND user_id = $2
+       AND (role != 'owner' OR (
+         SELECT count(*) FROM household_members WHERE household_id = $1 AND role = 'owner'
+       ) > 1)
+     RETURNING role`,
+    [id, userId],
   );
-  const target = rows.find((r) => r.user_id === userId);
-  if (!target) {
+  if (rows.length > 0) {
+    return res.status(204).end();
+  }
+  // No row deleted: either the member doesn't exist at all (404, as
+  // before), or they do exist and are the last owner (409, as before).
+  const { rows: existing } = await pool.query(
+    'SELECT 1 FROM household_members WHERE household_id = $1 AND user_id = $2',
+    [id, userId],
+  );
+  if (existing.length === 0) {
     return res.status(404).json({ error: 'member not found' });
   }
-  const ownerCount = rows.filter((r) => r.role === 'owner').length;
-  if (target.role === 'owner' && ownerCount <= 1) {
-    return res.status(409).json({ error: 'cannot remove the last owner' });
-  }
-  await pool.query('DELETE FROM household_members WHERE household_id = $1 AND user_id = $2', [
-    id,
-    userId,
-  ]);
-  res.status(204).end();
+  return res.status(409).json({ error: 'cannot remove the last owner' });
 });

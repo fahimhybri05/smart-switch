@@ -7,6 +7,7 @@ import {
   broadcastToHousehold,
   getDeviceSockets,
   registerDevice,
+  rejectPendingForDevice,
   resolveDeviceResponse,
   unregisterDevice,
 } from './registry.js';
@@ -118,73 +119,80 @@ export function handleDeviceConnection(ws) {
       return; // ignore malformed frames rather than tearing down the socket
     }
 
-    if (!authenticated) {
-      if (!msg.deviceId || !msg.cloudSecret) {
-        return ws.close(4001, 'expected {deviceId, cloudSecret}');
-      }
-      try {
-        const result = await authenticateDevice(msg.deviceId, msg.cloudSecret);
-        if (!result) {
-          console.warn(`device auth rejected: invalid secret for ${msg.deviceId}`);
-          return ws.close(4003, 'invalid device secret');
+    try {
+      if (!authenticated) {
+        if (!msg.deviceId || !msg.cloudSecret) {
+          return ws.close(4001, 'expected {deviceId, cloudSecret}');
         }
-        clearTimeout(authTimer);
-        deviceId = msg.deviceId;
-        authenticated = true;
-        ws.isAlive = true;
-        registerDevice(deviceId, ws);
-        console.log(`device connected: ${deviceId}`);
-        if (result.householdId) {
-          broadcastToHousehold(result.householdId, { event: 'device_online', deviceId });
+        try {
+          const result = await authenticateDevice(msg.deviceId, msg.cloudSecret);
+          if (!result) {
+            console.warn(`device auth rejected: invalid secret for ${msg.deviceId}`);
+            return ws.close(4003, 'invalid device secret');
+          }
+          clearTimeout(authTimer);
+          deviceId = msg.deviceId;
+          authenticated = true;
+          ws.isAlive = true;
+          registerDevice(deviceId, ws);
+          console.log(`device connected: ${deviceId}`);
+          if (result.householdId) {
+            broadcastToHousehold(result.householdId, { event: 'device_online', deviceId });
+          }
+        } catch (err) {
+          console.error(`device auth failed for ${msg.deviceId}`, err);
+          ws.close(1011, 'internal error');
         }
-      } catch (err) {
-        console.error(`device auth failed for ${msg.deviceId}`, err);
-        ws.close(1011, 'internal error');
+        return;
       }
-      return;
-    }
 
-    // Relayed responses.
-    if (msg.reqId && 'status' in msg) {
-      resolveDeviceResponse(msg.reqId, msg.status, msg.body);
-      return;
-    }
-
-    // Unsolicited local-schedule-fired state change. This is the ONE
-    // true "a channel actually changed" signal in the whole system,
-    // regardless of what caused it — activity logging and (once
-    // automations ships) automation-trigger evaluation both hook here.
-    if (msg.event === 'state_changed' && typeof msg.channelIdx === 'number') {
-      const attribution = takeAttribution(deviceId, msg.channelIdx, msg.state) ?? {
-        source: 'device',
-        actorUserId: null,
-        automationId: null,
-      };
-      const { depth = 0, chainAutomationIds = new Set() } = attribution;
-      const householdId = await recordStateChange(deviceId, msg.channelIdx, msg.state);
-      if (householdId) {
-        logActivity({
-          householdId,
-          deviceId,
-          channelIdx: msg.channelIdx,
-          state: msg.state,
-          ...attribution,
-        }).catch((err) => console.error('logActivity failed', err));
-        broadcastToHousehold(householdId, {
-          event: 'state_changed',
-          deviceId,
-          channelIdx: msg.channelIdx,
-          state: msg.state,
-        });
-        evaluateStateTriggeredAutomations({
-          deviceId,
-          channelIdx: msg.channelIdx,
-          state: msg.state,
-          householdId,
-          depth,
-          chainAutomationIds,
-        }).catch((err) => console.error('evaluateStateTriggeredAutomations failed', err));
+      // Relayed responses.
+      if (msg.reqId && 'status' in msg) {
+        resolveDeviceResponse(msg.reqId, msg.status, msg.body);
+        return;
       }
+
+      // Unsolicited local-schedule-fired state change. This is the ONE
+      // true "a channel actually changed" signal in the whole system,
+      // regardless of what caused it — activity logging and (once
+      // automations ships) automation-trigger evaluation both hook here.
+      if (msg.event === 'state_changed' && typeof msg.channelIdx === 'number') {
+        const attribution = takeAttribution(deviceId, msg.channelIdx, msg.state) ?? {
+          source: 'device',
+          actorUserId: null,
+          automationId: null,
+        };
+        const { depth = 0, chainAutomationIds = new Set() } = attribution;
+        const householdId = await recordStateChange(deviceId, msg.channelIdx, msg.state);
+        if (householdId) {
+          logActivity({
+            householdId,
+            deviceId,
+            channelIdx: msg.channelIdx,
+            state: msg.state,
+            ...attribution,
+          }).catch((err) => console.error('logActivity failed', err));
+          broadcastToHousehold(householdId, {
+            event: 'state_changed',
+            deviceId,
+            channelIdx: msg.channelIdx,
+            state: msg.state,
+          });
+          evaluateStateTriggeredAutomations({
+            deviceId,
+            channelIdx: msg.channelIdx,
+            state: msg.state,
+            householdId,
+            depth,
+            chainAutomationIds,
+          }).catch((err) => console.error('evaluateStateTriggeredAutomations failed', err));
+        }
+      }
+    } catch (err) {
+      // Express-async-errors doesn't cover WS event handlers — an unhandled
+      // rejection here would otherwise crash the whole process (see
+      // server.js's process-level safety net for the last-resort backstop).
+      console.error(`device message handler failed for ${deviceId}`, err);
     }
   });
 
@@ -199,6 +207,9 @@ export function handleDeviceConnection(ws) {
         `device disconnected: ${deviceId} (code=${code} reason=${reason})`,
       );
       unregisterDevice(deviceId, ws);
+      // Fail any in-flight relay to this device fast instead of leaving it
+      // to sit out the full RELAY_TIMEOUT_MS now that the socket is gone.
+      rejectPendingForDevice(deviceId);
       markOffline(deviceId).catch((err) =>
         console.error(`failed to mark ${deviceId} offline`, err),
       );

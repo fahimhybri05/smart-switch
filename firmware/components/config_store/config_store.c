@@ -19,7 +19,15 @@ static const char *TAG = "config_store";
 #define SS_CONFIG_TMP_PATH "/storage/config.json.tmp"
 
 static ss_config_t       s_cfg;
-static SemaphoreHandle_t s_mutex;
+// s_data_mutex protects the in-RAM s_cfg struct only — held only for brief
+// RAM-only mutate/memcpy operations, never across flash I/O. s_write_mutex
+// serializes the actual LittleFS write in write_json_locked() and is held
+// only for the duration of that I/O. Splitting these (instead of one lock
+// covering both) means config_store_get()/config_store_load() — called on
+// every relay toggle's interlock check and every scheduler_tick() — never
+// block on a concurrent flash write from one of the setters below.
+static SemaphoreHandle_t s_data_mutex;
+static SemaphoreHandle_t s_write_mutex;
 
 static esp_err_t write_json_locked(const ss_config_t *cfg);
 static esp_err_t read_json(ss_config_t *out);
@@ -48,12 +56,18 @@ void config_store_default(ss_config_t *out)
         sw->zone[0] = '\0';
         snprintf(sw->type, sizeof(sw->type), "ON_OFF");
         snprintf(sw->default_boot_state, sizeof(sw->default_boot_state), "OFF");
+        snprintf(sw->input_mode, sizeof(sw->input_mode), "DISABLED");
+        sw->inching_ms = 0;
     }
 
     out->schedule_count = 0;
     out->next_schedule_id = 1;
     out->auth_password_set = false;
     out->utc_offset_min = 0;
+    out->interlock_enabled = false;
+    out->latitude = 0.0;
+    out->longitude = 0.0;
+    out->location_set = false;
 
     uint8_t secret_bytes[16];
     esp_fill_random(secret_bytes, sizeof(secret_bytes));
@@ -82,20 +96,38 @@ esp_err_t config_store_init(void)
         ESP_LOGI(TAG, "storage mounted: %d/%d bytes used", (int)used, (int)total);
     }
 
-    s_mutex = xSemaphoreCreateMutex();
-    if (s_mutex == NULL) {
+    s_data_mutex = xSemaphoreCreateMutex();
+    if (s_data_mutex == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    s_write_mutex = xSemaphoreCreateMutex();
+    if (s_write_mutex == NULL) {
         return ESP_ERR_NO_MEM;
     }
 
     err = read_json(&s_cfg);
-    if (err == ESP_ERR_NOT_FOUND) {
-        ESP_LOGI(TAG, "%s not found, generating default config", SS_CONFIG_PATH);
-        config_store_default(&s_cfg);
-        err = write_json_locked(&s_cfg);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "failed to persist default config (%s)", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        // ANY read/parse failure (missing file, truncated/garbage JSON, OOM,
+        // ...) falls back to defaults rather than propagating the error up
+        // to main.c's ESP_ERROR_CHECK(config_store_init()) — that would
+        // abort() and reboot straight back into re-reading the same corrupt
+        // file, forever. A blank/default config is always safer than a boot
+        // loop, even though it does mean any existing switches/schedules/
+        // settings on a corrupt file are lost.
+        if (err == ESP_ERR_NOT_FOUND) {
+            ESP_LOGI(TAG, "%s not found, generating default config", SS_CONFIG_PATH);
+        } else {
+            ESP_LOGE(TAG, "%s failed to load (%s) — treating as corrupt and falling back to "
+                          "defaults; any existing switches/schedules/settings are LOST",
+                     SS_CONFIG_PATH, esp_err_to_name(err));
         }
-    } else if (err == ESP_OK && s_cfg.cloud_secret[0] == '\0') {
+        config_store_default(&s_cfg);
+        esp_err_t save_err = write_json_locked(&s_cfg);
+        if (save_err != ESP_OK) {
+            ESP_LOGE(TAG, "failed to persist default config (%s) — continuing boot with "
+                          "in-RAM defaults only", esp_err_to_name(save_err));
+        }
+    } else if (s_cfg.cloud_secret[0] == '\0') {
         // Existing config from before cloud_secret existed — generate one now
         // rather than requiring a factory reset to get a cloud identity.
         ESP_LOGI(TAG, "no cloud_secret in existing config, generating one");
@@ -109,16 +141,19 @@ esp_err_t config_store_init(void)
             ESP_LOGE(TAG, "failed to persist generated cloud_secret (%s)", esp_err_to_name(save_err));
         }
     }
-    return err;
+    // Always continue booting with whatever is now in s_cfg (loaded,
+    // defaulted, or defaulted-after-corruption) — config_store_init() must
+    // never make main.c's ESP_ERROR_CHECK() abort over a config-file problem.
+    return ESP_OK;
 }
 
 esp_err_t config_store_get(ss_config_t *out)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     memcpy(out, &s_cfg, sizeof(*out));
-    xSemaphoreGive(s_mutex);
+    xSemaphoreGive(s_data_mutex);
     return ESP_OK;
 }
 
@@ -153,6 +188,9 @@ static void schedule_to_json(cJSON *arr, const ss_schedule_t *s)
         // (http_api builds its own response JSON and omits this field).
         cJSON_AddNumberToObject(item, "_countdown_started_at", (double)s->countdown_started_at);
     }
+    if (strcmp(s->type, "sunrise") == 0 || strcmp(s->type, "sunset") == 0) {
+        cJSON_AddNumberToObject(item, "solar_offset_min", s->solar_offset_min);
+    }
     cJSON_AddBoolToObject(item, "enabled", s->enabled);
     cJSON_AddItemToArray(arr, item);
 }
@@ -176,6 +214,8 @@ static esp_err_t write_json_locked(const ss_config_t *cfg)
         cJSON_AddStringToObject(item, "zone", sw->zone);
         cJSON_AddStringToObject(item, "type", sw->type);
         cJSON_AddStringToObject(item, "default_boot_state", sw->default_boot_state);
+        cJSON_AddStringToObject(item, "input_mode", sw->input_mode);
+        cJSON_AddNumberToObject(item, "inching_ms", sw->inching_ms);
         cJSON_AddItemToArray(switches, item);
     }
 
@@ -186,6 +226,10 @@ static esp_err_t write_json_locked(const ss_config_t *cfg)
 
     cJSON_AddNumberToObject(root, "_next_schedule_id", cfg->next_schedule_id);
     cJSON_AddNumberToObject(root, "utc_offset_min", cfg->utc_offset_min);
+    cJSON_AddBoolToObject(root, "interlock_enabled", cfg->interlock_enabled);
+    cJSON_AddNumberToObject(root, "latitude", cfg->latitude);
+    cJSON_AddNumberToObject(root, "longitude", cfg->longitude);
+    cJSON_AddBoolToObject(root, "location_set", cfg->location_set);
     cJSON_AddBoolToObject(root, "_static_ip_enabled", cfg->static_ip_enabled);
     cJSON_AddStringToObject(root, "_static_ip", cfg->static_ip);
     cJSON_AddStringToObject(root, "_static_gateway", cfg->static_gateway);
@@ -214,8 +258,20 @@ static esp_err_t write_json_locked(const ss_config_t *cfg)
         err = ESP_FAIL;
         goto done;
     }
-    fputs(rendered, f);
-    fclose(f);
+    // fputs() returns a negative value on error (not necessarily the byte
+    // count written); fclose() returns non-zero on error (e.g. a buffered
+    // write failing to actually flush to the LittleFS partition, full disk,
+    // ...). Either failing means SS_CONFIG_TMP_PATH may be truncated/garbage
+    // — never rename() that over the last-good config.
+    int put_ret = fputs(rendered, f);
+    int close_ret = fclose(f);
+    if (put_ret < 0 || close_ret != 0) {
+        ESP_LOGE(TAG, "failed to write %s (fputs=%d, fclose=%d) — discarding tmp file, keeping last-good config",
+                 SS_CONFIG_TMP_PATH, put_ret, close_ret);
+        remove(SS_CONFIG_TMP_PATH);
+        err = ESP_FAIL;
+        goto done;
+    }
 
     if (rename(SS_CONFIG_TMP_PATH, SS_CONFIG_PATH) != 0) {
         ESP_LOGE(TAG, "failed to rename %s -> %s", SS_CONFIG_TMP_PATH, SS_CONFIG_PATH);
@@ -229,14 +285,19 @@ done:
 
 esp_err_t config_store_save(const ss_config_t *cfg)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    ss_config_t snapshot;
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
-    esp_err_t err = write_json_locked(cfg);
-    if (err == ESP_OK) {
-        memcpy(&s_cfg, cfg, sizeof(s_cfg));
+    memcpy(&s_cfg, cfg, sizeof(s_cfg));
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
+
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
     }
-    xSemaphoreGive(s_mutex);
+    esp_err_t err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
     return err;
 }
 
@@ -259,6 +320,12 @@ static void parse_switch(const cJSON *item, ss_switch_t *sw)
     }
     if ((v = cJSON_GetObjectItem(item, "default_boot_state")) && cJSON_IsString(v)) {
         snprintf(sw->default_boot_state, sizeof(sw->default_boot_state), "%s", v->valuestring);
+    }
+    if ((v = cJSON_GetObjectItem(item, "input_mode")) && cJSON_IsString(v)) {
+        snprintf(sw->input_mode, sizeof(sw->input_mode), "%s", v->valuestring);
+    }
+    if ((v = cJSON_GetObjectItem(item, "inching_ms")) && cJSON_IsNumber(v)) {
+        sw->inching_ms = (uint32_t)v->valuedouble;
     }
 }
 
@@ -296,6 +363,9 @@ static void parse_schedule(const cJSON *item, ss_schedule_t *s)
     }
     if ((v = cJSON_GetObjectItem(item, "_countdown_started_at")) && cJSON_IsNumber(v)) {
         s->countdown_started_at = (int64_t)v->valuedouble;
+    }
+    if ((v = cJSON_GetObjectItem(item, "solar_offset_min")) && cJSON_IsNumber(v)) {
+        s->solar_offset_min = (int16_t)v->valueint;
     }
     if ((v = cJSON_GetObjectItem(item, "enabled")) && cJSON_IsBool(v)) {
         s->enabled = cJSON_IsTrue(v);
@@ -400,6 +470,18 @@ static esp_err_t read_json(ss_config_t *out)
     if ((v = cJSON_GetObjectItem(root, "utc_offset_min")) && cJSON_IsNumber(v)) {
         out->utc_offset_min = (int16_t)v->valueint;
     }
+    if ((v = cJSON_GetObjectItem(root, "interlock_enabled")) && cJSON_IsBool(v)) {
+        out->interlock_enabled = cJSON_IsTrue(v);
+    }
+    if ((v = cJSON_GetObjectItem(root, "latitude")) && cJSON_IsNumber(v)) {
+        out->latitude = v->valuedouble;
+    }
+    if ((v = cJSON_GetObjectItem(root, "longitude")) && cJSON_IsNumber(v)) {
+        out->longitude = v->valuedouble;
+    }
+    if ((v = cJSON_GetObjectItem(root, "location_set")) && cJSON_IsBool(v)) {
+        out->location_set = cJSON_IsTrue(v);
+    }
 
     if ((v = cJSON_GetObjectItem(root, "_static_ip_enabled")) && cJSON_IsBool(v)) {
         out->static_ip_enabled = cJSON_IsTrue(v);
@@ -435,19 +517,22 @@ static esp_err_t read_json(ss_config_t *out)
 
 esp_err_t config_store_get_schedules(ss_schedule_t *out, uint8_t max, uint8_t *count)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     uint8_t n = s_cfg.schedule_count < max ? s_cfg.schedule_count : max;
     memcpy(out, s_cfg.schedules, n * sizeof(ss_schedule_t));
     *count = n;
-    xSemaphoreGive(s_mutex);
+    xSemaphoreGive(s_data_mutex);
     return ESP_OK;
 }
 
 esp_err_t config_store_set_schedule(const ss_schedule_t *in, ss_schedule_t *out_stored)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    ss_config_t snapshot;
+    ss_schedule_t stored;
+
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
@@ -457,7 +542,8 @@ esp_err_t config_store_set_schedule(const ss_schedule_t *in, ss_schedule_t *out_
     if (in->id[0] == '\0') {
         if (s_cfg.schedule_count >= SS_MAX_SCHEDULES) {
             err = ESP_ERR_NO_MEM;
-            goto done;
+            xSemaphoreGive(s_data_mutex);
+            return err;
         }
         slot = s_cfg.schedule_count;
         s_cfg.schedules[slot] = *in;
@@ -472,8 +558,8 @@ esp_err_t config_store_set_schedule(const ss_schedule_t *in, ss_schedule_t *out_
             }
         }
         if (slot < 0) {
-            err = ESP_ERR_NOT_FOUND;
-            goto done;
+            xSemaphoreGive(s_data_mutex);
+            return ESP_ERR_NOT_FOUND;
         }
         char keep_id[12];
         snprintf(keep_id, sizeof(keep_id), "%s", s_cfg.schedules[slot].id);
@@ -481,45 +567,64 @@ esp_err_t config_store_set_schedule(const ss_schedule_t *in, ss_schedule_t *out_
         snprintf(s_cfg.schedules[slot].id, sizeof(s_cfg.schedules[slot].id), "%s", keep_id);
     }
 
-    err = write_json_locked(&s_cfg);
-    if (err == ESP_OK && out_stored != NULL) {
-        *out_stored = s_cfg.schedules[slot];
-    }
+    stored = s_cfg.schedules[slot];
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
 
-done:
-    xSemaphoreGive(s_mutex);
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
+
+    if (err == ESP_OK && out_stored != NULL) {
+        *out_stored = stored;
+    }
     return err;
 }
 
 esp_err_t config_store_delete_schedule(const char *id)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    ss_config_t snapshot;
+    bool found = false;
+
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
-    esp_err_t err = ESP_ERR_NOT_FOUND;
     for (int i = 0; i < s_cfg.schedule_count; i++) {
         if (strcmp(s_cfg.schedules[i].id, id) == 0) {
             for (int j = i; j < s_cfg.schedule_count - 1; j++) {
                 s_cfg.schedules[j] = s_cfg.schedules[j + 1];
             }
             s_cfg.schedule_count--;
-            err = write_json_locked(&s_cfg);
+            found = true;
             break;
         }
     }
+    if (!found) {
+        xSemaphoreGive(s_data_mutex);
+        return ESP_ERR_NOT_FOUND;
+    }
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
 
-    xSemaphoreGive(s_mutex);
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
     return err;
 }
 
 esp_err_t config_store_set_switch(const ss_switch_t *in)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    ss_config_t snapshot;
+
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
-    esp_err_t err = ESP_OK;
     int slot = -1;
     for (int i = 0; i < s_cfg.switch_count; i++) {
         if (s_cfg.switches[i].channel_idx == in->channel_idx) {
@@ -529,82 +634,151 @@ esp_err_t config_store_set_switch(const ss_switch_t *in)
     }
     if (slot < 0) {
         if (s_cfg.switch_count >= SS_MAX_CHANNELS) {
-            err = ESP_ERR_NO_MEM;
-            goto done;
+            xSemaphoreGive(s_data_mutex);
+            return ESP_ERR_NO_MEM;
         }
         slot = s_cfg.switch_count;
         s_cfg.switch_count++;
     }
     s_cfg.switches[slot] = *in;
-    err = write_json_locked(&s_cfg);
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
 
-done:
-    xSemaphoreGive(s_mutex);
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
     return err;
 }
 
 esp_err_t config_store_delete_switch(uint8_t channel_idx)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    ss_config_t snapshot;
+    bool found = false;
+
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
 
-    esp_err_t err = ESP_ERR_NOT_FOUND;
     for (int i = 0; i < s_cfg.switch_count; i++) {
         if (s_cfg.switches[i].channel_idx == channel_idx) {
             for (int j = i; j < s_cfg.switch_count - 1; j++) {
                 s_cfg.switches[j] = s_cfg.switches[j + 1];
             }
             s_cfg.switch_count--;
-            err = write_json_locked(&s_cfg);
+            found = true;
             break;
         }
     }
+    if (!found) {
+        xSemaphoreGive(s_data_mutex);
+        return ESP_ERR_NOT_FOUND;
+    }
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
 
-    xSemaphoreGive(s_mutex);
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
     return err;
 }
 
 esp_err_t config_store_set_auth_hash(const uint8_t hash[32])
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    ss_config_t snapshot;
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     memcpy(s_cfg.auth_password_hash, hash, 32);
     s_cfg.auth_password_set = true;
-    esp_err_t err = write_json_locked(&s_cfg);
-    xSemaphoreGive(s_mutex);
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
+
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
     return err;
 }
 
 esp_err_t config_store_get_auth_hash(uint8_t out[32], bool *is_set)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     *is_set = s_cfg.auth_password_set;
     if (*is_set) {
         memcpy(out, s_cfg.auth_password_hash, 32);
     }
-    xSemaphoreGive(s_mutex);
+    xSemaphoreGive(s_data_mutex);
     return ESP_OK;
 }
 
 esp_err_t config_store_set_utc_offset(int16_t offset_min)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    ss_config_t snapshot;
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     s_cfg.utc_offset_min = offset_min;
-    esp_err_t err = write_json_locked(&s_cfg);
-    xSemaphoreGive(s_mutex);
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
+
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
+    return err;
+}
+
+esp_err_t config_store_set_interlock(bool enabled)
+{
+    ss_config_t snapshot;
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    s_cfg.interlock_enabled = enabled;
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
+
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
+    return err;
+}
+
+esp_err_t config_store_set_location(double latitude, double longitude)
+{
+    ss_config_t snapshot;
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    s_cfg.latitude = latitude;
+    s_cfg.longitude = longitude;
+    s_cfg.location_set = true;
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
+
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
     return err;
 }
 
 esp_err_t config_store_set_static_ip(bool enabled, const char *ip, const char *gateway,
                                       const char *subnet, const char *dns)
 {
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) {
+    ss_config_t snapshot;
+    if (xSemaphoreTake(s_data_mutex, portMAX_DELAY) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     s_cfg.static_ip_enabled = enabled;
@@ -614,7 +788,13 @@ esp_err_t config_store_set_static_ip(bool enabled, const char *ip, const char *g
         snprintf(s_cfg.static_subnet, sizeof(s_cfg.static_subnet), "%s", subnet);
         snprintf(s_cfg.static_dns, sizeof(s_cfg.static_dns), "%s", dns ? dns : "");
     }
-    esp_err_t err = write_json_locked(&s_cfg);
-    xSemaphoreGive(s_mutex);
+    memcpy(&snapshot, &s_cfg, sizeof(snapshot));
+    xSemaphoreGive(s_data_mutex);
+
+    if (xSemaphoreTake(s_write_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = write_json_locked(&snapshot);
+    xSemaphoreGive(s_write_mutex);
     return err;
 }

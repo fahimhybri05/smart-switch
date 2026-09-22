@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/device/device_config.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../routing/app_routes.dart';
+import '../../services/backend/backend_api_exception.dart';
 import '../../services/backend/backend_devices_client.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
@@ -20,6 +22,12 @@ typedef NetworkDialogResult = ({
   String? gateway,
   String? subnet,
   String? dns,
+});
+
+typedef DeviceSettingsDialogResult = ({
+  bool interlockEnabled,
+  double? latitude,
+  double? longitude,
 });
 
 class SettingsScreen extends ConsumerWidget {
@@ -111,6 +119,57 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
+  /// Unclaims the device from the account first (so it doesn't just
+  /// reappear on the next [syncClaimedDevicesFromBackend]/pull-to-refresh
+  /// on this or any other phone signed into the same account), then
+  /// removes it from this phone's local registry. Only actually removed
+  /// locally once the account side is confirmed gone — a device that was
+  /// never cloud-claimed (404) still counts as "gone" for this purpose.
+  Future<void> _removeDevice(
+    BuildContext context,
+    WidgetRef ref,
+    KnownDevice device,
+  ) async {
+    if (ref.read(authProvider) != null &&
+        ref.read(backendUrlProvider) != null) {
+      try {
+        final accessToken = await ensureFreshAccessToken(ref);
+        await BackendDevicesClient(
+          baseUrl: ref.read(backendUrlProvider)!,
+          accessToken: accessToken,
+        ).unclaim(device.deviceId);
+      } on BackendApiException catch (e) {
+        if (e.statusCode != 404) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(e.message)));
+          }
+          return;
+        }
+      } catch (_) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Could not reach the server to remove this device from '
+                'your account. Check your connection and try again.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+    }
+
+    await ref.read(knownDevicesProvider.notifier).remove(device.deviceId);
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Device removed')));
+    }
+  }
+
   Future<void> _editTimezone(
     BuildContext context,
     WidgetRef ref,
@@ -182,6 +241,58 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
         );
+      }
+    }
+  }
+
+  Future<void> _editDeviceSettings(
+    BuildContext context,
+    WidgetRef ref,
+    KnownDevice device,
+  ) async {
+    DeviceConfig config;
+    try {
+      config = await ref
+          .read(activeDeviceApiClientProvider(device))
+          .getConfig();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to load: $e')));
+      }
+      return;
+    }
+    if (!context.mounted) return;
+
+    final result = await showDialog<DeviceSettingsDialogResult>(
+      context: context,
+      builder: (context) => _DeviceSettingsDialog(
+        deviceName: device.friendlyName,
+        config: config,
+      ),
+    );
+    if (result == null) return;
+
+    try {
+      await ref
+          .read(activeDeviceApiClientProvider(device))
+          .setDeviceSettings(
+            interlockEnabled: result.interlockEnabled,
+            latitude: result.latitude,
+            longitude: result.longitude,
+          );
+      ref.invalidate(deviceConfigProvider(device));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Device settings updated')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
       }
     }
   }
@@ -309,18 +420,16 @@ class SettingsScreen extends ConsumerWidget {
             child: Column(
               children: [
                 ListTile(
-                  leading: const Icon(Icons.family_restroom_outlined),
+                  leading: const _RowIconBox(Icons.family_restroom_outlined),
                   title: const Text('Manage household'),
-                  subtitle: const Text(
-                    'Who can see and control your devices',
-                  ),
+                  subtitle: const Text('Who can see and control your devices'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () =>
                       Navigator.of(context).pushNamed(AppRoutes.household),
                 ),
                 const Divider(height: 1),
                 ListTile(
-                  leading: const Icon(Icons.history_outlined),
+                  leading: const _RowIconBox(Icons.history_outlined),
                   title: const Text('Activity history'),
                   subtitle: const Text('Every switch on/off event'),
                   trailing: const Icon(Icons.chevron_right),
@@ -329,7 +438,7 @@ class SettingsScreen extends ConsumerWidget {
                 ),
                 const Divider(height: 1),
                 ListTile(
-                  leading: const Icon(Icons.bolt_outlined),
+                  leading: const _RowIconBox(Icons.bolt_outlined),
                   title: const Text('Automations'),
                   subtitle: const Text('Rules that run on their own'),
                   trailing: const Icon(Icons.chevron_right),
@@ -340,7 +449,7 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
           const _SectionHeader(
-            icon: Icons.devices_other,
+            icon: Icons.developer_board_outlined,
             label: 'Known devices',
           ),
           if (devices.isEmpty)
@@ -352,21 +461,24 @@ class SettingsScreen extends ConsumerWidget {
             for (final device in devices)
               Card(
                 child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: colorScheme.primaryContainer,
-                    child: Icon(
-                      Icons.developer_board,
-                      color: colorScheme.onPrimaryContainer,
-                    ),
+                  leading: _RowIconBox(
+                    Icons.developer_board_outlined,
+                    color: colorScheme.primary,
                   ),
                   title: InkWell(
                     onTap: () => _renameDevice(context, ref, device),
-                    child: Text(device.friendlyName),
+                    child: Text(
+                      device.friendlyName,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
                   ),
                   subtitle: Text(
                     device.lastKnownIp == null
                         ? '${device.deviceId} — not found on this network yet'
                         : '${device.deviceId} — ${device.lastKnownIp}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
                   ),
                   trailing: PopupMenuButton<String>(
                     icon: const Icon(Icons.more_horiz_rounded),
@@ -378,13 +490,22 @@ class SettingsScreen extends ConsumerWidget {
                           await _editTimezone(context, ref, device);
                         case 'network':
                           await _editNetwork(context, ref, device);
+                        case 'device_settings':
+                          await _editDeviceSettings(context, ref, device);
                         case 'remove':
                           final confirmed = await showDialog<bool>(
                             context: context,
                             builder: (context) => AlertDialog(
+                              icon: Icon(
+                                Icons.warning_amber_rounded,
+                                color: Theme.of(context).colorScheme.error,
+                              ),
                               title: const Text('Remove device?'),
                               content: Text(
-                                'Remove "${device.friendlyName}" from this phone? The device itself is unaffected.',
+                                'Remove "${device.friendlyName}" from your account? '
+                                'Every phone signed into this account will lose access, '
+                                'and it will need to be added again to reconnect. '
+                                'The device itself is unaffected.',
                               ),
                               actions: [
                                 TextButton(
@@ -393,6 +514,14 @@ class SettingsScreen extends ConsumerWidget {
                                   child: const Text('Cancel'),
                                 ),
                                 FilledButton(
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: Theme.of(
+                                      context,
+                                    ).colorScheme.error,
+                                    foregroundColor: Theme.of(
+                                      context,
+                                    ).colorScheme.onError,
+                                  ),
                                   onPressed: () =>
                                       Navigator.of(context).pop(true),
                                   child: const Text('Remove'),
@@ -400,25 +529,49 @@ class SettingsScreen extends ConsumerWidget {
                               ],
                             ),
                           );
-                          if (confirmed ?? false) {
-                            await ref
-                                .read(knownDevicesProvider.notifier)
-                                .remove(device.deviceId);
+                          if ((confirmed ?? false) && context.mounted) {
+                            await _removeDevice(context, ref, device);
                           }
                       }
                     },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(
                         value: 'remote',
-                        child: Text('Enable remote control'),
+                        child: _MenuRow(
+                          icon: Icons.settings_remote_outlined,
+                          label: 'Enable remote control',
+                        ),
                       ),
-                      PopupMenuItem(value: 'timezone', child: Text('Timezone')),
-                      PopupMenuItem(
+                      const PopupMenuItem(
+                        value: 'timezone',
+                        child: _MenuRow(
+                          icon: Icons.schedule_outlined,
+                          label: 'Timezone',
+                        ),
+                      ),
+                      const PopupMenuItem(
                         value: 'network',
-                        child: Text('Network settings'),
+                        child: _MenuRow(
+                          icon: Icons.wifi_outlined,
+                          label: 'Network settings',
+                        ),
                       ),
-                      PopupMenuDivider(),
-                      PopupMenuItem(value: 'remove', child: Text('Remove device')),
+                      const PopupMenuItem(
+                        value: 'device_settings',
+                        child: _MenuRow(
+                          icon: Icons.tune_outlined,
+                          label: 'Interlock & location',
+                        ),
+                      ),
+                      const PopupMenuDivider(),
+                      PopupMenuItem(
+                        value: 'remove',
+                        child: _MenuRow(
+                          icon: Icons.delete_outline,
+                          label: 'Remove device',
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -429,9 +582,10 @@ class SettingsScreen extends ConsumerWidget {
           ),
           Card(
             child: ListTile(
-              leading: const Icon(Icons.widgets_outlined),
+              leading: const _RowIconBox(Icons.widgets_outlined),
               title: const Text('Pinned switches'),
               subtitle: const Text('Choose up to 4 switches to pin (Android)'),
+              trailing: const Icon(Icons.chevron_right),
               onTap: () => showPinnedSwitchesDialog(context),
             ),
           ),
@@ -440,7 +594,7 @@ class SettingsScreen extends ConsumerWidget {
             child: Column(
               children: [
                 ListTile(
-                  leading: const Icon(Icons.upload_outlined),
+                  leading: const _RowIconBox(Icons.upload_outlined),
                   title: const Text('Export backup'),
                   subtitle: const Text(
                     'Known devices, groups, and a config snapshot',
@@ -449,7 +603,7 @@ class SettingsScreen extends ConsumerWidget {
                 ),
                 const Divider(height: 1),
                 ListTile(
-                  leading: const Icon(Icons.download_outlined),
+                  leading: const _RowIconBox(Icons.download_outlined),
                   title: const Text('Import backup'),
                   subtitle: const Text('Restores known devices and groups'),
                   onTap: () => _importBackup(context, ref),
@@ -461,17 +615,66 @@ class SettingsScreen extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(vertical: Spacing.lg),
             child: Center(
               child: Text(
-                'Smart Switch — serverless ESP32/8266 relay control.\nVersion 1.0.0',
+                'Smart Switch — ESP32/8266 relay control, local-first with optional cloud relay.\nVersion 1.0.0',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 12,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: colorScheme.onSurfaceVariant,
+                  height: 1.5,
                 ),
               ),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Icon + label used inside a [PopupMenuItem] — gives the known-devices
+/// overflow menu the same icon-led weight as the rest of the settings list
+/// instead of a plain text menu.
+class _MenuRow extends StatelessWidget {
+  const _MenuRow({required this.icon, required this.label, this.color});
+
+  final IconData icon;
+  final String label;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final iconColor = color ?? Theme.of(context).colorScheme.primary;
+    return Row(
+      children: [
+        Icon(icon, size: 19, color: iconColor),
+        const SizedBox(width: Spacing.sm),
+        Text(label, style: color == null ? null : TextStyle(color: color)),
+      ],
+    );
+  }
+}
+
+/// Small tonal icon badge used as the leading element on this screen's
+/// plain nav rows, in place of a bare [Icon] floating on the tile — a
+/// standard Material 3 tonal-fill treatment, no border.
+class _RowIconBox extends StatelessWidget {
+  const _RowIconBox(this.icon, {this.color});
+
+  final IconData icon;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final tint = color ?? colorScheme.primary;
+    return Container(
+      width: 34,
+      height: 34,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: tint.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, size: 18, color: tint),
     );
   }
 }
@@ -488,15 +691,21 @@ class _SectionHeader extends StatelessWidget {
     return Padding(
           padding: const EdgeInsetsDirectional.fromSTEB(
             Spacing.md,
-            Spacing.md,
+            Spacing.lg,
             Spacing.md,
             Spacing.xs,
           ),
           child: Row(
             children: [
-              Icon(icon, size: 18, color: colorScheme.onSurfaceVariant),
+              Icon(icon, size: 16, color: colorScheme.primary),
               const SizedBox(width: Spacing.xs),
-              Text(label, style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ],
           ),
         )
@@ -562,7 +771,31 @@ class _CloudAccountCard extends StatelessWidget {
             else
               Row(
                 children: [
-                  Expanded(child: Text(auth!.email)),
+                  _RowIconBox(
+                    Icons.verified_user_outlined,
+                    color: Theme.of(context).colorScheme.tertiary,
+                  ),
+                  const SizedBox(width: Spacing.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          auth!.email,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        Text(
+                          'Signed in',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
                   TextButton(onPressed: onLogout, child: const Text('Log out')),
                 ],
               ),
@@ -590,6 +823,7 @@ class _BackendUrlFieldState extends State<_BackendUrlField> {
   late final TextEditingController _controller = TextEditingController(
     text: widget.initialValue ?? '',
   );
+  final _formKey = GlobalKey<FormState>();
 
   @override
   void dispose() {
@@ -597,22 +831,51 @@ class _BackendUrlFieldState extends State<_BackendUrlField> {
     super.dispose();
   }
 
+  // Empty is allowed (clears the backend URL); anything else must be a
+  // well-formed http(s) URL so a typo surfaces here instead of as a
+  // confusing connection failure later.
+  String? _validate(String? value) {
+    final text = (value ?? '').trim();
+    if (text.isEmpty) {
+      return null;
+    }
+    if (!text.startsWith('http://') && !text.startsWith('https://')) {
+      return 'Must start with http:// or https://';
+    }
+    final uri = Uri.tryParse(text);
+    if (uri == null || uri.host.isEmpty) {
+      return 'Enter a valid URL';
+    }
+    return null;
+  }
+
+  void _submit(String value) {
+    if (_formKey.currentState?.validate() ?? false) {
+      widget.onSubmitted(value);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return TextField(
-      controller: _controller,
-      decoration: InputDecoration(
-        labelText: 'Backend server URL',
-        hintText: 'https://switch.example.com',
-        suffixIcon: IconButton(
-          icon: const Icon(Icons.check),
-          tooltip: 'Save',
-          onPressed: () => widget.onSubmitted(_controller.text),
+    return Form(
+      key: _formKey,
+      child: TextFormField(
+        controller: _controller,
+        decoration: InputDecoration(
+          labelText: 'Backend server URL',
+          hintText: 'https://switch.example.com',
+          suffixIcon: IconButton(
+            icon: const Icon(Icons.check),
+            tooltip: 'Save',
+            onPressed: () => _submit(_controller.text),
+          ),
         ),
+        keyboardType: TextInputType.url,
+        autocorrect: false,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        validator: _validate,
+        onFieldSubmitted: _submit,
       ),
-      keyboardType: TextInputType.url,
-      autocorrect: false,
-      onSubmitted: widget.onSubmitted,
     );
   }
 }
@@ -676,6 +939,7 @@ class _TimezoneDialogState extends State<_TimezoneDialog> {
   late final TextEditingController _controller = TextEditingController(
     text: '${DateTime.now().timeZoneOffset.inMinutes}',
   );
+  final _formKey = GlobalKey<FormState>();
 
   @override
   void dispose() {
@@ -683,17 +947,33 @@ class _TimezoneDialogState extends State<_TimezoneDialog> {
     super.dispose();
   }
 
+  // Real-world UTC offsets range from -12:00 to +14:00.
+  String? _validate(String? value) {
+    final parsed = int.tryParse((value ?? '').trim());
+    if (parsed == null) {
+      return 'Enter a whole number of minutes';
+    }
+    if (parsed < -720 || parsed > 840) {
+      return 'Offset must be between -720 and 840';
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text('${widget.deviceName} timezone'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        keyboardType: const TextInputType.numberWithOptions(signed: true),
-        decoration: const InputDecoration(
-          labelText: 'UTC offset (minutes)',
-          helperText: 'e.g. 330 for IST, -300 for EST',
+      content: Form(
+        key: _formKey,
+        child: TextFormField(
+          controller: _controller,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(signed: true),
+          decoration: const InputDecoration(
+            labelText: 'UTC offset (minutes)',
+            helperText: 'e.g. 330 for IST, -300 for EST',
+          ),
+          validator: _validate,
         ),
       ),
       actions: [
@@ -703,6 +983,9 @@ class _TimezoneDialogState extends State<_TimezoneDialog> {
         ),
         FilledButton(
           onPressed: () {
+            if (!(_formKey.currentState?.validate() ?? false)) {
+              return;
+            }
             final value = int.tryParse(_controller.text.trim());
             Navigator.of(context).pop(value);
           },
@@ -829,6 +1112,134 @@ class _NetworkDialogState extends State<_NetworkDialog> {
               gateway: gateway,
               subnet: subnet,
               dns: dns.isEmpty ? null : dns,
+            ));
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+class _DeviceSettingsDialog extends StatefulWidget {
+  const _DeviceSettingsDialog({required this.deviceName, required this.config});
+
+  final String deviceName;
+  final DeviceConfig config;
+
+  @override
+  State<_DeviceSettingsDialog> createState() => _DeviceSettingsDialogState();
+}
+
+class _DeviceSettingsDialogState extends State<_DeviceSettingsDialog> {
+  late bool _interlockEnabled = widget.config.interlockEnabled;
+  late final _latController = TextEditingController(
+    text: widget.config.locationSet ? widget.config.latitude.toString() : '',
+  );
+  late final _lonController = TextEditingController(
+    text: widget.config.locationSet ? widget.config.longitude.toString() : '',
+  );
+
+  @override
+  void dispose() {
+    _latController.dispose();
+    _lonController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('${widget.deviceName} settings'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Interlock mode'),
+              subtitle: const Text(
+                'Turning any channel ON forces every other channel OFF',
+              ),
+              value: _interlockEnabled,
+              onChanged: (v) => setState(() => _interlockEnabled = v),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Location (for sunrise/sunset schedules)',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _latController,
+              decoration: const InputDecoration(
+                labelText: 'Latitude',
+                hintText: '-90 to 90',
+              ),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+                signed: true,
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _lonController,
+              decoration: const InputDecoration(
+                labelText: 'Longitude',
+                hintText: '-180 to 180',
+              ),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+                signed: true,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final latText = _latController.text.trim();
+            final lonText = _lonController.text.trim();
+            if (latText.isEmpty != lonText.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Set both latitude and longitude, or leave both blank',
+                  ),
+                ),
+              );
+              return;
+            }
+            double? lat, lon;
+            if (latText.isNotEmpty) {
+              lat = double.tryParse(latText);
+              lon = double.tryParse(lonText);
+              if (lat == null ||
+                  lon == null ||
+                  lat < -90 ||
+                  lat > 90 ||
+                  lon < -180 ||
+                  lon > 180) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Latitude must be -90..90 and longitude -180..180',
+                    ),
+                  ),
+                );
+                return;
+              }
+            }
+            Navigator.of(context).pop((
+              interlockEnabled: _interlockEnabled,
+              latitude: lat,
+              longitude: lon,
             ));
           },
           child: const Text('Save'),

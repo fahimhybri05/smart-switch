@@ -1,4 +1,5 @@
 import express from 'express';
+import 'express-async-errors';
 
 import { activityRouter } from './routes/activity.js';
 import { authRouter } from './routes/auth.js';

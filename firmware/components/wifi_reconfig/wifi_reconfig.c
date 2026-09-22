@@ -54,28 +54,66 @@ static void worker_task(void *arg)
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         provisioning_set_auto_reconnect_suspended(true);
-        esp_wifi_set_storage(WIFI_STORAGE_RAM);
-        esp_wifi_disconnect();
-        esp_wifi_set_config(WIFI_IF_STA, &s_candidate_sta_config);
+        esp_err_t err;
+        err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_wifi_set_storage(RAM) failed: %s", esp_err_to_name(err));
+        }
+        err = esp_wifi_disconnect();
+        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_STARTED) {
+            ESP_LOGW(TAG, "esp_wifi_disconnect (pre-candidate) failed: %s", esp_err_to_name(err));
+        }
+        err = esp_wifi_set_config(WIFI_IF_STA, &s_candidate_sta_config);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_wifi_set_config(candidate) failed: %s", esp_err_to_name(err));
+        }
 
         xEventGroupClearBits(s_test_event_group, TEST_CONNECTED_BIT | TEST_DISCONNECTED_BIT);
         s_test_armed = true;
-        esp_wifi_connect();
+        err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_wifi_connect(candidate) failed: %s", esp_err_to_name(err));
+        }
 
         EventBits_t bits = xEventGroupWaitBits(s_test_event_group, TEST_CONNECTED_BIT | TEST_DISCONNECTED_BIT,
                                                 pdTRUE, pdFALSE, pdMS_TO_TICKS(TEST_TIMEOUT_MS));
         s_test_armed = false;
 
         if (bits & TEST_CONNECTED_BIT) {
-            esp_wifi_set_storage(WIFI_STORAGE_FLASH);
-            esp_wifi_set_config(WIFI_IF_STA, &s_candidate_sta_config); // re-set now that storage=FLASH, to persist
+            err = esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "esp_wifi_set_storage(FLASH) failed: %s", esp_err_to_name(err));
+            }
+            err = esp_wifi_set_config(WIFI_IF_STA, &s_candidate_sta_config); // re-set now that storage=FLASH, to persist
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "esp_wifi_set_config(candidate, persist) failed: %s", esp_err_to_name(err));
+            }
             s_state = WIFI_RECONFIG_STATE_CONNECTED;
             ESP_LOGI(TAG, "reconfig test succeeded, new credentials persisted");
         } else {
-            esp_wifi_disconnect();
-            esp_wifi_set_storage(WIFI_STORAGE_FLASH);
-            esp_wifi_set_config(WIFI_IF_STA, &s_cached_sta_config);
-            esp_wifi_connect();
+            // Rollback path: this is the branch that matters most to get
+            // logged. If any of these calls fail, the radio may not actually
+            // end up connected to either network even though s_state below
+            // still reports FAILED_ROLLED_BACK (the async API contract is
+            // intentionally not changed here — see the wifi_reconfig_state_t
+            // callers/poll path) — so a rollback failure is otherwise
+            // invisible outside the device logs.
+            err = esp_wifi_disconnect();
+            if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_STARTED) {
+                ESP_LOGE(TAG, "rollback: esp_wifi_disconnect(candidate) failed: %s", esp_err_to_name(err));
+            }
+            err = esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "rollback: esp_wifi_set_storage(FLASH) failed: %s", esp_err_to_name(err));
+            }
+            err = esp_wifi_set_config(WIFI_IF_STA, &s_cached_sta_config);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "rollback: esp_wifi_set_config(cached) failed: %s", esp_err_to_name(err));
+            }
+            err = esp_wifi_connect();
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "rollback: esp_wifi_connect(cached) failed: %s", esp_err_to_name(err));
+            }
             s_state = WIFI_RECONFIG_STATE_FAILED_ROLLED_BACK;
             ESP_LOGW(TAG, "reconfig test failed/timed out, rolled back to previous credentials");
         }

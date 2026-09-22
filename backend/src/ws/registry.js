@@ -8,8 +8,13 @@ const deviceSockets = new Map();
 /** userId -> Set<WebSocket> (every open dashboard/app connection for that user). */
 const clientSocketsByUser = new Map();
 
-/** internal device-facing reqId -> { clientWs, clientReqId, timeout } */
+/** internal device-facing reqId -> { resolve, deviceId, timeout } */
 const pendingRequests = new Map();
+
+/** deviceId -> Set<reqId> — lets a device's disconnect immediately settle
+ * every request still in flight to it, instead of leaving each one to sit
+ * out the full RELAY_TIMEOUT_MS. */
+const pendingReqIdsByDevice = new Map();
 
 const RELAY_TIMEOUT_MS = 10_000;
 
@@ -83,18 +88,32 @@ function sendRelay(deviceId, { method, path, body }) {
 
   const reqId = crypto.randomUUID();
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    const cleanup = () => {
       pendingRequests.delete(reqId);
+      pendingReqIdsByDevice.get(deviceId)?.delete(reqId);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
       reject(Object.assign(new Error('device_timeout'), { code: 'device_timeout' }));
     }, RELAY_TIMEOUT_MS);
 
     pendingRequests.set(reqId, {
+      deviceId,
+      reject: (err) => {
+        clearTimeout(timeout);
+        cleanup();
+        reject(err);
+      },
       resolve: (status, respBody) => {
         clearTimeout(timeout);
-        pendingRequests.delete(reqId);
+        cleanup();
         resolve({ status, body: respBody });
       },
     });
+    if (!pendingReqIdsByDevice.has(deviceId)) {
+      pendingReqIdsByDevice.set(deviceId, new Set());
+    }
+    pendingReqIdsByDevice.get(deviceId).add(reqId);
 
     deviceWs.send(JSON.stringify({ reqId, method, path, body }));
   });
@@ -142,4 +161,23 @@ export function resolveDeviceResponse(reqId, status, body) {
     return; // already timed out, or an unsolicited/unknown reqId
   }
   pending.resolve(status, body);
+}
+
+/**
+ * Immediately rejects every request still in flight to `deviceId` with the
+ * same `device_offline`-coded error `sendRelay`'s no-connection path uses,
+ * clearing each one's timeout — called right after `unregisterDevice` when
+ * a device's socket drops, so an in-flight command fails fast instead of
+ * sitting out the full RELAY_TIMEOUT_MS.
+ */
+export function rejectPendingForDevice(deviceId) {
+  const reqIds = pendingReqIdsByDevice.get(deviceId);
+  if (!reqIds) {
+    return;
+  }
+  for (const reqId of [...reqIds]) {
+    const pending = pendingRequests.get(reqId);
+    pending?.reject(Object.assign(new Error('device_offline'), { code: 'device_offline' }));
+  }
+  pendingReqIdsByDevice.delete(deviceId);
 }

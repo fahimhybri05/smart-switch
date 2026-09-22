@@ -11,7 +11,7 @@
 #include "freertos/task.h"
 #include "mbedtls/sha256.h"
 
-#include "cloud_client.h"
+#include "channel_control.h"
 #include "config_store.h"
 #include "relay_hal.h"
 #include "schedule_exec.h"
@@ -77,6 +77,8 @@ static cJSON *switch_to_json(const ss_switch_t *sw)
     cJSON_AddStringToObject(item, "zone", sw->zone);
     cJSON_AddStringToObject(item, "type", sw->type);
     cJSON_AddStringToObject(item, "default_boot_state", sw->default_boot_state);
+    cJSON_AddStringToObject(item, "input_mode", sw->input_mode);
+    cJSON_AddNumberToObject(item, "inching_ms", sw->inching_ms);
     return item;
 }
 
@@ -100,6 +102,9 @@ static cJSON *schedule_to_json(const ss_schedule_t *s)
     }
     if (strcmp(s->type, "countdown") == 0) {
         cJSON_AddNumberToObject(item, "duration_s", s->duration_s);
+    }
+    if (strcmp(s->type, "sunrise") == 0 || strcmp(s->type, "sunset") == 0) {
+        cJSON_AddNumberToObject(item, "solar_offset_min", s->solar_offset_min);
     }
     // countdown_started_at is deliberately omitted — internal/disk-format
     // only, not part of the spec §2 wire schema.
@@ -159,6 +164,10 @@ static esp_err_t handle_get_config(httpd_req_t *req)
     cJSON_AddStringToObject(root, "channel_driver", cfg.channel_driver);
     cJSON_AddStringToObject(root, "fw_version", cfg.fw_version);
     cJSON_AddNumberToObject(root, "utc_offset_min", cfg.utc_offset_min);
+    cJSON_AddBoolToObject(root, "interlock_enabled", cfg.interlock_enabled);
+    cJSON_AddNumberToObject(root, "latitude", cfg.latitude);
+    cJSON_AddNumberToObject(root, "longitude", cfg.longitude);
+    cJSON_AddBoolToObject(root, "location_set", cfg.location_set);
 
     cJSON *network = cJSON_AddObjectToObject(root, "network");
     cJSON_AddStringToObject(network, "mode", cfg.static_ip_enabled ? "static" : "dhcp");
@@ -206,6 +215,25 @@ static bool parse_switch_body(const cJSON *root, ss_switch_t *out)
         if (strcmp(v->valuestring, "ON") == 0 || strcmp(v->valuestring, "LAST") == 0 || strcmp(v->valuestring, "OFF") == 0) {
             snprintf(out->default_boot_state, sizeof(out->default_boot_state), "%s", v->valuestring);
         }
+    }
+
+    snprintf(out->input_mode, sizeof(out->input_mode), "DISABLED");
+    out->inching_ms = 0;
+    if ((v = cJSON_GetObjectItem(root, "input_mode")) && cJSON_IsString(v)) {
+        if (strcmp(v->valuestring, "TOGGLE") == 0 || strcmp(v->valuestring, "EDGE") == 0 ||
+            strcmp(v->valuestring, "DISABLED") == 0) {
+            snprintf(out->input_mode, sizeof(out->input_mode), "%s", v->valuestring);
+        }
+    }
+    if ((v = cJSON_GetObjectItem(root, "inching_ms")) && cJSON_IsNumber(v)) {
+        double ms = v->valuedouble;
+        if (ms < 0) {
+            ms = 0;
+        }
+        if (ms > 600000) {
+            ms = 600000;
+        }
+        out->inching_ms = (uint32_t)ms;
     }
     return true;
 }
@@ -335,8 +363,7 @@ static esp_err_t handle_post_channel_state(httpd_req_t *req)
     bool on = (strcmp(state->valuestring, "ON") == 0);
     cJSON_Delete(root);
 
-    relay_hal_set_state((uint8_t)idx, on);
-    cloud_client_notify_state_changed((uint8_t)idx, on);
+    channel_control_set_state((uint8_t)idx, on);
 
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddNumberToObject(resp, "channel_idx", idx);
@@ -388,6 +415,13 @@ static bool parse_schedule_body(const cJSON *root, ss_schedule_t *out)
         out->duration_s = (uint32_t)v->valuedouble;
     }
 
+    if ((v = cJSON_GetObjectItem(root, "solar_offset_min")) && cJSON_IsNumber(v)) {
+        if (v->valueint < -180 || v->valueint > 180) {
+            return false;
+        }
+        out->solar_offset_min = (int16_t)v->valueint;
+    }
+
     out->enabled = true;
     if ((v = cJSON_GetObjectItem(root, "enabled")) && cJSON_IsBool(v)) {
         out->enabled = cJSON_IsTrue(v);
@@ -422,6 +456,14 @@ static esp_err_t handle_post_schedules(httpd_req_t *req)
         return reply_error(req, "400 Bad Request", "missing required fields");
     }
     cJSON_Delete(root);
+
+    if (strcmp(in.type, "sunrise") == 0 || strcmp(in.type, "sunset") == 0) {
+        ss_config_t cfg;
+        config_store_get(&cfg);
+        if (!cfg.location_set) {
+            return reply_error(req, "400 Bad Request", "device location not configured");
+        }
+    }
 
     ss_schedule_t stored;
     esp_err_t err = schedule_exec_upsert(&in, &stored);
@@ -610,6 +652,59 @@ static esp_err_t handle_post_network(httpd_req_t *req)
     return ESP_OK; // unreachable
 }
 
+// ----------------------------------------------------------- POST /api/settings
+
+// POST /api/settings — {"interlock_enabled"?: bool, "latitude"?: number, "longitude"?: number}
+static esp_err_t handle_post_settings(httpd_req_t *req)
+{
+    if (!http_auth_check(req)) { return ESP_OK; }
+    char buf[192];
+    esp_err_t rerr = read_body(req, buf, sizeof(buf));
+    if (rerr == ESP_FAIL) { return ESP_FAIL; }
+    if (rerr != ESP_OK) { return reply_error(req, "400 Bad Request", "body too large"); }
+
+    cJSON *root = cJSON_Parse(buf);
+    if (root == NULL) { return reply_error(req, "400 Bad Request", "invalid JSON"); }
+
+    const cJSON *interlock = cJSON_GetObjectItem(root, "interlock_enabled");
+    const cJSON *lat = cJSON_GetObjectItem(root, "latitude");
+    const cJSON *lon = cJSON_GetObjectItem(root, "longitude");
+
+    bool have_lat = cJSON_IsNumber(lat), have_lon = cJSON_IsNumber(lon);
+    if (have_lat != have_lon) {
+        cJSON_Delete(root);
+        return reply_error(req, "400 Bad Request", "latitude and longitude must be set together");
+    }
+    if (have_lat && (lat->valuedouble < -90.0 || lat->valuedouble > 90.0 ||
+                      lon->valuedouble < -180.0 || lon->valuedouble > 180.0)) {
+        cJSON_Delete(root);
+        return reply_error(req, "400 Bad Request", "latitude/longitude out of range");
+    }
+    if (!cJSON_IsBool(interlock) && !have_lat) {
+        cJSON_Delete(root);
+        return reply_error(req, "400 Bad Request", "no recognized fields");
+    }
+
+    if (cJSON_IsBool(interlock)) {
+        esp_err_t err = config_store_set_interlock(cJSON_IsTrue(interlock));
+        if (err != ESP_OK) { cJSON_Delete(root); return reply_error(req, "500 Internal Server Error", "failed to persist interlock setting"); }
+    }
+    if (have_lat) {
+        esp_err_t err = config_store_set_location(lat->valuedouble, lon->valuedouble);
+        if (err != ESP_OK) { cJSON_Delete(root); return reply_error(req, "500 Internal Server Error", "failed to persist location"); }
+    }
+    cJSON_Delete(root);
+
+    ss_config_t cfg;
+    config_store_get(&cfg);
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddBoolToObject(resp, "interlock_enabled", cfg.interlock_enabled);
+    cJSON_AddNumberToObject(resp, "latitude", cfg.latitude);
+    cJSON_AddNumberToObject(resp, "longitude", cfg.longitude);
+    cJSON_AddBoolToObject(resp, "location_set", cfg.location_set);
+    return reply_json(req, resp);
+}
+
 // ------------------------------------------------------------------ startup
 
 esp_err_t http_api_start(void)
@@ -619,9 +714,17 @@ esp_err_t http_api_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 14; // 11 here + /api/wifi, /api/ota (wifi_reconfig/ota components) + headroom
+    config.max_uri_handlers = 15; // 12 here + /api/wifi, /api/ota (wifi_reconfig/ota components) + headroom
     config.stack_size = 8192;     // cJSON + mbedtls (base64/sha256) stack frames on the auth path
     config.uri_match_fn = httpd_uri_match_wildcard;
+    // Without this, a handful of slow/idle LAN clients can occupy every
+    // worker/socket slot indefinitely and the server refuses all new
+    // connections — including cloud_client's own 127.0.0.1 loopback calls,
+    // which implement every cloud-relayed command. Evict the
+    // least-recently-used connection instead of refusing a new one.
+    config.lru_purge_enable = true;
+    // config.recv_wait_timeout defaults to 5s (HTTPD_DEFAULT_CONFIG) already
+    // tight enough — left unchanged.
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -641,6 +744,7 @@ esp_err_t http_api_start(void)
         {.uri = "/api/auth/password", .method = HTTP_POST, .handler = handle_post_auth_password},
         {.uri = "/api/timezone", .method = HTTP_POST, .handler = handle_post_timezone},
         {.uri = "/api/network", .method = HTTP_POST, .handler = handle_post_network},
+        {.uri = "/api/settings", .method = HTTP_POST, .handler = handle_post_settings},
     };
 
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); i++) {

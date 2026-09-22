@@ -1,19 +1,25 @@
 #pragma once
 
-// NodeMCU/Wemos D1 mini (ESP-12E/F) pin map — 6 relay channels + 1
-// MOSFET-driven channel (kept plain on/off for this pass, no PWM — see
-// docs/plan.md) + I2C for the DS3231 RTC, all direct GPIO (no I2C relay
-// expander on this board).
+// NodeMCU/Wemos D1 mini (ESP-12E/F) pin map — 6 relay channels + I2C for
+// the DS3231 RTC, all direct GPIO (no I2C relay expander on this board).
+//
+// GPIO0 is this board's physical BOOT/FLASH button — previously double-
+// booked as a 7th (MOSFET) relay channel, now dedicated to the recovery
+// button instead (mirrors the ESP32 firmware's GPIO0 recovery-button
+// convention) since this chip's ~9 usable GPIOs leave no other spare pin.
+// If your build needs the 7th channel back, you'll need to give up the
+// physical-button recovery feature (set SS_BOOT_BUTTON_GPIO back to -1)
+// or the DS3231/I2C pins instead — there simply isn't a free GPIO to have
+// all three.
 //
 // This chip only breaks out ~9 usable GPIOs total, so every "spare" pin is
 // double-booked with a boot-strapping role. These are DEFAULTS matching the
 // common wiring convention for this exact pin-budget problem — verify
 // against your actual PCB before flashing if your board differs:
 //
-//   GPIO0  (D3): relay 7 (MOSFET) + boot-strap (must read HIGH at boot) —
-//                active-low relay convention means "off" = HIGH, which is
-//                also GPIO0's required boot level, so this is safe as long
-//                as the relay driver holds it HIGH before boot-mode latch.
+//   GPIO0  (D3): recovery button + boot-strap (must read HIGH at boot) —
+//                INPUT_PULLUP idles HIGH when not pressed, satisfying the
+//                boot-strap requirement the same way relay 7 used to.
 //   GPIO2  (D4): I2C SDA + boot-strap (must read HIGH at boot) + onboard
 //                LED on most boards — I2C SDA idles HIGH (pulled up)
 //                between transactions, compatible with the boot
@@ -26,7 +32,7 @@
 //                identity log line (device_id/cloud_secret for the QR
 //                sticker), same as the ESP32 firmware. Never repurposed.
 
-#define SS_CHANNEL_COUNT 7 // 6 relays + 1 MOSFET channel, all binary on/off
+#define SS_CHANNEL_COUNT 6 // 6 relays, all binary on/off
 
 static const uint8_t SS_RELAY_ACTIVE_LOW = true;
 
@@ -37,7 +43,6 @@ static const int8_t SS_RELAY_GPIO[SS_CHANNEL_COUNT] = {
     12, // D6 — relay 4
     13, // D7 — relay 5
     16, // D0 — relay 6
-    0,  // D3 — relay 7 (MOSFET channel, plain on/off — see note above)
 };
 
 #define SS_I2C_SDA_GPIO 2  // D4
@@ -45,15 +50,23 @@ static const int8_t SS_RELAY_GPIO[SS_CHANNEL_COUNT] = {
 
 // BOOT-equivalent recovery button: short hold = WiFi-only reset, long hold
 // = full factory reset — mirrors the ESP32 firmware's recovery_button
-// component. NodeMCU/D1 mini have no dedicated user button wired to a free
-// GPIO by default; this assumes an external button added to GPIO0 is NOT
-// used (GPIO0 is a relay output here) — wire a momentary button between
-// this GPIO and GND instead, using the ESP32 board's same active-low +
-// internal-pullup convention.
-#define SS_BOOT_BUTTON_GPIO -1 // -1 = not wired; recovery button disabled
-                               // until a free GPIO is assigned for your build
+// component. GPIO0 is this board's physical BOOT/FLASH button (see the pin
+// map note above) — active-low + internal-pullup, same convention the
+// ESP32 board uses.
+#define SS_BOOT_BUTTON_GPIO 0
 #define SS_BOOT_SHORT_HOLD_MS 5000
 #define SS_BOOT_LONG_HOLD_MS 12000
+
+// Physical wall-switch/button input per channel — mirrors SS_RELAY_GPIO
+// above but for reading, not driving. -1 = not wired (default for every
+// channel — this board's GPIO budget is already fully committed to relays +
+// I2C + boot-strap constraints documented at the top of this file; a real
+// build must free up pins deliberately before using this feature, exactly
+// like SS_BOOT_BUTTON_GPIO above).
+static const uint8_t SS_INPUT_ACTIVE_LOW = true;
+static const int8_t SS_INPUT_GPIO[SS_CHANNEL_COUNT] = {
+    -1, -1, -1, -1, -1, -1,
+};
 
 #define SS_STATUS_LED_GPIO 2 // shared with I2C SDA — see note above
 

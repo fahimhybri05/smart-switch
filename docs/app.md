@@ -451,9 +451,13 @@ error}` on failure, matched back to the pending `Completer` by `reqId`
 entry and throws `CloudRelayException` if no reply arrives. Unsolicited
 frames with an `event` key (currently just `state_changed`: `{event,
 deviceId, channelIdx, state}`) are pushed to a broadcast `stateChanges`
-stream — **exposed but not consumed by any provider/screen today** (see
-§11); the app still relies purely on `channelStatesProvider`'s 2s poll for
-live state, even though the backend already supports push updates.
+stream, consumed by `channelStatePushListenerProvider`
+(`service_providers.dart`): on each push it invalidates the matching
+device's `channelStatesProvider`, so a screen already watching that device
+refetches immediately instead of waiting for the next poll tick.
+`channelStatesProvider` still polls on its own timer regardless (2s local,
+6s under cloud backoff) — the push is a latency shortcut on top of that
+poll, not a replacement for it.
 
 ### Auth flow
 
@@ -824,18 +828,12 @@ live state, even though the backend already supports push updates.
    described as existing purely so a future non-binary product (dimmer, fan,
    power meter) won't need a breaking schema change, and isn't read by any
    UI yet.
-3. **`BackendWsClient.stateChanges`** (unsolicited `state_changed` push
-   events from the backend) **is wired up but never consumed** — its own
-   comment says "not wired into any provider yet... explicitly out of scope
-   this pass." The app relies entirely on `channelStatesProvider`'s 2-second
-   poll for live updates even though server-push already exists on the
-   wire.
-4. **Scenes are Hive-only, unlike Groups/Automations** — `SmartScene` has no
+3. **Scenes are Hive-only, unlike Groups/Automations** — `SmartScene` has no
    backend client at all (no `BackendScenesClient`), so scenes don't sync
    across a household's multiple phones/accounts the way groups and
    automations do. Confirmed by a comment in `automation.dart`: "Scenes are
    still Hive-only/unsynced."
-5. **`ProvisioningWizardScreen` ("Advanced provisioning") appears to be
+4. **`ProvisioningWizardScreen` ("Advanced provisioning") appears to be
    unreachable from the UI**, contradicting its own route's doc comment.
    `app_routes.dart` registers `AppRoutes.provisioning` with a comment
    claiming it is "reachable from Settings," but a repo-wide search finds
@@ -844,23 +842,16 @@ live state, even though the backend already supports push updates.
    guided `AddDeviceWizardScreen` appears to be the only in-app path to
    provisioning today; the older screen is only reachable by a manual deep
    link.
-6. **The Android home-screen widget and background monitor are Android-only
+5. **The Android home-screen widget and background monitor are Android-only
    by explicit runtime checks** (`defaultTargetPlatform ==
    TargetPlatform.android`) — there is no iOS equivalent for either
    feature; iOS users get no offline/state-change notifications and no
    home-screen widget.
-7. **iOS background execution is explicitly called out as unsupported** —
+6. **iOS background execution is explicitly called out as unsupported** —
    `background_monitor_service.dart`'s doc comment states "iOS background
    execution is unreliable under this model and untestable in this
    environment," and `initializeBackgroundMonitor()` simply no-ops there.
-8. **Stale "serverless" framing in user-facing/metadata strings** — despite
-   the fully-implemented backend integration layer, `pubspec.yaml`'s
-   `description` field, `app/README.md`, and `SettingsScreen`'s About
-   footer text ("Smart Switch — serverless ESP32/8266 relay control") all
-   still describe the app as serverless. This matches the task's framing
-   that `docs/plan.md`/`README.md` are historical and the code has moved
-   on, but the *shipped app copy itself* hasn't been updated to match.
-9. **Automations' owner-gated UI is checked account-wide, not per-automation's
+7. **Automations' owner-gated UI is checked account-wide, not per-automation's
    household** — `AutomationsScreen` computes `isOwnerSomewhere =
    households.any((h) => h.isOwner)` once and uses it to show/hide every
    automation's edit/delete controls and the "new automation" FAB,
@@ -871,9 +862,9 @@ live state, even though the backend already supports push updates.
    `BackendAutomationsClient`'s "owner-only server-side" comment — so this
    looks like a client-side UX looseness rather than a security hole, but
    it can surface a misleading "you can edit this" control).
-10. **`setNetworkConfig` races the device's own reboot by design** — its doc
-    comment acknowledges the device reboots immediately after responding,
-    so an error at the HTTP layer may just be the reboot itself; the
-    Settings screen surfaces this ambiguity to the user in the error
-    message rather than resolving it, which is a known/accepted rough edge,
-    not a bug.
+8. **`setNetworkConfig` races the device's own reboot by design** — its doc
+   comment acknowledges the device reboots immediately after responding,
+   so an error at the HTTP layer may just be the reboot itself; the
+   Settings screen surfaces this ambiguity to the user in the error
+   message rather than resolving it, which is a known/accepted rough edge,
+   not a bug.

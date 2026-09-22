@@ -41,6 +41,10 @@ class _SmartSwitchAppState extends ConsumerState<SmartSwitchApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(pushTimezoneToKnownDevicesFromWidget(ref));
+      // The OS may have silently dropped the WS socket while backgrounded;
+      // don't wait out whatever's left of the timer-driven backoff (up to
+      // 30s) before reconnecting — see BackendWsClient.reconnectNow.
+      ref.read(backendWsClientProvider)?.reconnectNow();
     }
   }
 

@@ -21,6 +21,21 @@ static String s_previousPassword;
 static const unsigned long CONNECT_TIMEOUT_MS = 15000;
 static const unsigned long DEFER_MS = 700;
 
+// Fix 2 support: while boot-time fallback leaves the device parked in
+// AP-only mode with previously-stored credentials that just haven't been
+// reachable *yet* (e.g. router still rebooting after a shared power
+// outage), periodically retry them in the background instead of waiting
+// forever for a human to join the SoftAP and re-enter creds that already
+// work. Deliberately separate from the WifiReconfigState machine above
+// (which is the manual /api/wifi reconfigure flow's app-facing state) —
+// this is purely internal and never surfaced to the app beyond the
+// eventual Connected transition both paths share.
+enum class ApRetryState { Idle, Testing };
+static ApRetryState s_apRetryState = ApRetryState::Idle;
+static unsigned long s_lastApRetryMs = 0;
+static unsigned long s_apRetryConnectStart = 0;
+static const unsigned long AP_RETRY_INTERVAL_MS = 5UL * 60UL * 1000UL; // 5 minutes
+
 const char *wifiReconfigStateStr(WifiReconfigState state) {
   switch (state) {
     case WifiReconfigState::Idle:
@@ -71,6 +86,16 @@ void wifiProvisioningBegin() {
     WiFi.mode(WIFI_STA);
     applyStaticIpIfConfigured();
     WiFi.begin();
+    // Intentionally blocking: this runs before any other subsystem starts
+    // (httpApiBegin/scheduleExecBegin/cloudClientBegin/recoveryButtonBegin
+    // are all still ahead in setup()), so nothing already running is frozen
+    // by it — the device just isn't reachable on any interface for up to
+    // 20s at boot. Not shortened here: it's an existing, presumably-tuned
+    // value, and a shorter timeout risks more frequent unnecessary SoftAP
+    // fallbacks on a normal, slightly-slow router. If 20s genuinely isn't
+    // enough (router still rebooting, etc.), the periodic AP-mode retry
+    // below (see ApRetryState / wifiProvisioningLoop()) is what recovers
+    // afterwards, without needing a human to intervene.
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
       delay(250);
@@ -90,6 +115,12 @@ void wifiProvisioningBegin() {
   // SoftAP itself is WPA2-protected using device_id as the password, the
   // same physically-visible identity already used as the pairing secret.
   WiFi.softAP(apName.c_str(), configStore.cfg().device_id);
+  // Start the periodic auto-retry clock now (Fix 2) — if stored credentials
+  // exist, wifiProvisioningLoop() will start trying them again in the
+  // background after AP_RETRY_INTERVAL_MS. Harmless to set even when no
+  // credentials are stored (fresh device): the retry is separately gated on
+  // WiFi.SSID().length() > 0 below, so it just never fires in that case.
+  s_lastApRetryMs = millis();
 }
 
 void wifiProvisioningLoop() {
@@ -111,6 +142,39 @@ void wifiProvisioningLoop() {
         WiFi.begin(s_previousSsid.c_str(), s_previousPassword.c_str());
       }
       s_state = WifiReconfigState::FailedRolledBack;
+    }
+  }
+
+  // Fix 2: automatic background retry of the already-stored credentials
+  // while stuck in AP-only fallback since boot. Only starts when nothing
+  // else is already driving a WiFi transition (mode is exactly WIFI_AP —
+  // not AP_STA, which is what the manual-reconfigure machine above uses
+  // while it's mid-test/mid-rollback — and s_state isn't Testing), so the
+  // two mechanisms never fight over WiFi.begin()/WiFi.mode() at once.
+  if (s_apRetryState == ApRetryState::Idle && s_state != WifiReconfigState::Testing &&
+      WiFi.getMode() == WIFI_AP && WiFi.SSID().length() > 0 &&
+      (long)(millis() - s_lastApRetryMs) >= (long)AP_RETRY_INTERVAL_MS) {
+    s_lastApRetryMs = millis();
+    WiFi.mode(WIFI_AP_STA); // keep the AP alive in case the stored creds still don't work
+    WiFi.begin(); // reuse the SDK-persisted STA credentials, same ones tried at boot
+    s_apRetryConnectStart = millis();
+    s_apRetryState = ApRetryState::Testing;
+  } else if (s_apRetryState == ApRetryState::Testing) {
+    if (WiFi.status() == WL_CONNECTED) {
+      s_apRetryState = ApRetryState::Idle;
+      s_state = WifiReconfigState::Connected;
+      WiFi.mode(WIFI_STA); // router's back — drop the AP
+      WiFi.setSleepMode(WIFI_NONE_SLEEP); // re-assert — see wifiProvisioningBegin()
+    } else if (millis() - s_apRetryConnectStart > CONNECT_TIMEOUT_MS) {
+      s_apRetryState = ApRetryState::Idle;
+      s_lastApRetryMs = millis(); // next attempt is a full interval from now
+      // If a manual reconfigure test started while our retry was in
+      // flight, leave WiFi.mode() alone — that state machine now owns the
+      // AP/STA transitions and will resolve it (Connected or
+      // FailedRolledBack) on its own.
+      if (s_state != WifiReconfigState::Testing) {
+        WiFi.mode(WIFI_AP); // still unreachable — back to pure AP, try again next interval
+      }
     }
   }
 }

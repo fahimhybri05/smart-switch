@@ -6,10 +6,12 @@ import '../../models/device/channel_state.dart';
 import '../../models/device/switch_config.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
+import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
 import '../device_detail/device_detail_screen.dart';
 import 'device_visualization.dart';
 import 'edit_switch_dialog.dart';
+import 'friendly_error.dart';
 
 /// Big, square, tap-to-toggle tile — the primary at-a-glance control surface
 /// on the Home dashboard (Google Home / Nest-style device grid). Whole tile
@@ -47,7 +49,16 @@ class DeviceTile extends ConsumerWidget {
         ? override == ChannelPowerState.on
         : polledIsOn;
     final isLoading = override == null && channelsAsync.isLoading;
-    final isOffline = override == null && channelsAsync.hasError;
+    // channelsAsync.hasError almost never fires in practice —
+    // channelStatesProvider swallows every poll failure into a successful
+    // `yield const []` so its retry loop can keep going (see that
+    // provider's doc comment) — so deviceUnreachableProvider is the real
+    // reachability signal; hasError is kept as a belt-and-suspenders check
+    // for the rare case the stream errors before that catch block runs.
+    final isOffline =
+        override == null &&
+        (channelsAsync.hasError ||
+            ref.watch(deviceUnreachableProvider(device)));
     final visualState = override != null
         ? DeviceVisualState.pending
         : isOffline
@@ -68,9 +79,11 @@ class DeviceTile extends ConsumerWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: isOffline ? null : () => _toggle(context, ref, !isOn),
+          onTap: isOffline || override != null
+              ? null
+              : () => _toggle(context, ref, !isOn),
           child: AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
+            duration: Motion.medium,
             curve: Curves.easeOut,
             decoration: BoxDecoration(
               color: backgroundColor,
@@ -80,42 +93,58 @@ class DeviceTile extends ConsumerWidget {
                     : colorScheme.outlineVariant.withValues(alpha: 0.45),
               ),
             ),
-            padding: const EdgeInsets.all(Spacing.md),
+            padding: const EdgeInsets.symmetric(
+              horizontal: Spacing.md,
+              vertical: Spacing.sm,
+            ),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
                     _StateDot(state: visualState, color: foregroundColor),
                     const Spacer(),
-                    PopupMenuButton<String>(
-                      icon: Icon(
-                        Icons.more_horiz_rounded,
-                        size: 20,
-                        color: foregroundColor.withValues(alpha: 0.7),
+                    // PopupMenuButton's default IconButton enforces a 48x48
+                    // min tap target regardless of the icon's own size —
+                    // shrinkWrap removes that so this header row doesn't
+                    // claim far more vertical space than its 20px icon
+                    // actually needs, which was overflowing this tile's
+                    // fixed grid-cell height by ~21px.
+                    Theme(
+                      data: Theme.of(context).copyWith(
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-                      onSelected: (value) {
-                        if (value == 'details') {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) =>
-                                  DeviceDetailScreen(device: device),
-                            ),
-                          );
-                        } else if (value == 'edit') {
-                          _edit(context, ref);
-                        }
-                      },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(
-                          value: 'details',
-                          child: Text('Open device'),
+                      child: PopupMenuButton<String>(
+                        padding: const EdgeInsets.all(4),
+                        icon: Icon(
+                          Icons.more_horiz_rounded,
+                          size: 20,
+                          color: foregroundColor.withValues(alpha: 0.7),
                         ),
-                        PopupMenuItem(
-                          value: 'edit',
-                          child: Text('Edit name and room'),
-                        ),
-                      ],
+                        onSelected: (value) {
+                          if (value == 'details') {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) =>
+                                    DeviceDetailScreen(device: device),
+                              ),
+                            );
+                          } else if (value == 'edit') {
+                            _edit(context, ref);
+                          }
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(
+                            value: 'details',
+                            child: Text('Open device'),
+                          ),
+                          PopupMenuItem(
+                            value: 'edit',
+                            child: Text('Edit name and room'),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -123,10 +152,12 @@ class DeviceTile extends ConsumerWidget {
                   kind: _kindFor(switchConfig.name),
                   state: visualState,
                   height: 112,
-                  onTap: isOffline ? null : () => _toggle(context, ref, !isOn),
+                  onTap: isOffline || override != null
+                      ? null
+                      : () => _toggle(context, ref, !isOn),
                 ),
                 AnimatedDefaultTextStyle(
-                  duration: const Duration(milliseconds: 250),
+                  duration: Motion.medium,
                   style: Theme.of(
                     context,
                   ).textTheme.titleMedium!.copyWith(color: foregroundColor),
@@ -138,7 +169,7 @@ class DeviceTile extends ConsumerWidget {
                 ),
                 const SizedBox(height: 2),
                 AnimatedDefaultTextStyle(
-                  duration: const Duration(milliseconds: 250),
+                  duration: Motion.medium,
                   style: Theme.of(context).textTheme.bodySmall!.copyWith(
                     color: foregroundColor.withValues(alpha: 0.8),
                   ),
@@ -175,9 +206,9 @@ class DeviceTile extends ConsumerWidget {
       await client.setChannelState(switchConfig.channelIdx, desired);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to toggle: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e, 'Toggle'))),
+        );
       }
     } finally {
       // Re-poll right away instead of waiting up to 2s for the next tick,
@@ -191,7 +222,7 @@ class DeviceTile extends ConsumerWidget {
     final result = await showEditSwitchDialog(context, switchConfig);
     if (result == null) return;
 
-    final (name, zone) = result;
+    final (name, zone, inputMode, inchingMs) = result;
     final client = ref.read(activeDeviceApiClientProvider(device));
     try {
       await client.upsertSwitch(
@@ -201,14 +232,16 @@ class DeviceTile extends ConsumerWidget {
           zone: zone,
           type: switchConfig.type,
           defaultBootState: switchConfig.defaultBootState,
+          inputMode: inputMode,
+          inchingMs: inchingMs,
         ),
       );
       ref.invalidate(deviceConfigProvider(device));
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e, 'Save'))),
+        );
       }
     }
   }
@@ -226,7 +259,7 @@ class _StateDot extends StatelessWidget {
     final isAttention =
         state == DeviceVisualState.offline || state == DeviceVisualState.error;
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
+      duration: Motion.fast,
       width: 10,
       height: 10,
       decoration: BoxDecoration(

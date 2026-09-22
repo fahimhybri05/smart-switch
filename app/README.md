@@ -1,6 +1,9 @@
 # smart_switch
 
-Smart Switch IoT platform — serverless Flutter app for ESP32/8266 relay nodes
+Smart Switch IoT platform — Flutter app for ESP32/8266 relay nodes. Local LAN
+control talks straight to each device's HTTP API; an optional self-hosted
+backend (`backend/`) adds accounts, households, and remote/off-LAN access via
+a relayed WebSocket tunnel.
 
 ## Getting Started
 

@@ -1,55 +1,63 @@
 #include "cloud_client.h"
 
 #include <ArduinoJson.h>
-#include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
 #include <WebSocketsClient.h>
 
 #include "board_config.h"
 #include "config_store.h"
+#include "http_api.h"
 #include "relay_hal.h"
 #include "wifi_provisioning.h"
 
 static WebSocketsClient s_ws;
 static bool s_connected = false;
 static bool s_started = false;
+static uint32_t s_consecutiveFailures = 0;
 
-// Proxies one relayed {reqId, method, path, body} command to this device's
-// own already-running local HTTP server (127.0.0.1) and sends the real
-// response back up the tunnel as {reqId, status, body}. No handler logic
-// is duplicated — mirrors the ESP32 firmware's cloud_client design.
+// Exponential backoff, capped, plus jitter — same doubling-capped shape as
+// http_auth.cpp's lockout backoff, applied here for the same reason: a
+// persistently unreachable backend must not keep retrying at a fixed short
+// interval forever. Every failed attempt still costs up to
+// WEBSOCKETS_TCP_TIMEOUT (platformio.ini) of stalled cooperative loop() —
+// during a prolonged outage that tax is what actually degrades local LAN
+// control, not the reconnect itself. Base/max chosen to keep the healthy
+// case's reconnect latency unchanged (first attempt still ~4-9s) while a
+// sustained outage backs off to at most once a minute.
+static const uint32_t kReconnectBaseMs = 4000;
+static const uint32_t kReconnectMaxMs = 60000;
+
+static uint32_t computeReconnectIntervalMs() {
+  uint32_t shift = s_consecutiveFailures > 4 ? 4 : s_consecutiveFailures; // cap shift, avoid overflow
+  uint32_t backoff = kReconnectBaseMs << shift; // 4s,8s,16s,32s,64s->capped below
+  if (backoff > kReconnectMaxMs) {
+    backoff = kReconnectMaxMs;
+  }
+  return backoff + secureRandom(0, 3000); // jitter, avoids fleet-wide lockstep retries
+}
+
+// Dispatches one relayed {reqId, method, path, body} command in-process
+// (see http_api.h's httpApiDispatch()) and sends the real response back up
+// the tunnel as {reqId, status, body}. No handler logic is duplicated —
+// same overall shape as the ESP32 firmware's cloud_client design, but
+// in-process rather than a loopback HTTP call: this chip has no RTOS, so a
+// blocking loopback call to its own ESP8266WebServer would self-deadlock
+// (handleClient() can't re-enter while this call blocks waiting on it in
+// the same loop() iteration).
 static void proxyAndReply(const char *reqId, const char *method, const char *path,
                            JsonVariant body) {
-  String url = String("http://127.0.0.1") + path;
-
-  WiFiClient client;
-  HTTPClient http;
-  http.begin(client, url);
-
   String bodyStr;
   if (!body.isNull()) {
     serializeJson(body, bodyStr);
-    http.addHeader("Content-Type", "application/json");
   }
 
   int status;
-  if (strcmp(method, "GET") == 0) {
-    status = http.GET();
-  } else if (strcmp(method, "POST") == 0) {
-    status = http.POST(bodyStr);
-  } else if (strcmp(method, "DELETE") == 0) {
-    status = http.sendRequest("DELETE", bodyStr);
-  } else {
-    http.end();
-    return;
-  }
-
-  String responseBody = status > 0 ? http.getString() : "";
-  http.end();
+  String responseBody;
+  httpApiDispatch(method, path, bodyStr.c_str(), &status, &responseBody);
 
   JsonDocument reply;
   reply["reqId"] = reqId;
-  reply["status"] = status > 0 ? status : 0;
+  reply["status"] = status;
   if (responseBody.length() > 0) {
     JsonDocument parsed;
     if (deserializeJson(parsed, responseBody) == DeserializationError::Ok) {
@@ -103,11 +111,14 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
       s_connected = true;
+      s_consecutiveFailures = 0;
       sendAuthFrame();
       publishFullState();
       break;
     case WStype_DISCONNECTED:
       s_connected = false;
+      s_consecutiveFailures++;
+      s_ws.setReconnectInterval(computeReconnectIntervalMs());
       break;
     case WStype_TEXT:
       handleIncomingFrame(payload, length);

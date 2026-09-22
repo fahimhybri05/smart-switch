@@ -183,6 +183,18 @@ esp_err_t ota_apply_update_abort(ota_session_handle_t handle)
 
 // ------------------------------------------------------------ HTTP handler
 
+// NOTE (accepted tradeoff, see also the WiFi-202-async design in
+// wifi_reconfig.c and ESP8266's no-secure-boot gap): this handler's body-read
+// loop below runs synchronously on esp_http_server's shared worker task for
+// the whole upload (tens of seconds for a full image). No other request can
+// be served on that worker while it runs — including cloud_client's own
+// 127.0.0.1 loopback calls, so every cloud-relayed command (and any other
+// local HTTP client) is blocked for the duration of an OTA transfer. This is
+// accepted as-is: an OTA update is a rare, deliberate, user-initiated event,
+// unlike normal relay control traffic. A future fix would need
+// esp_http_server's async request handling (httpd_req_async_handler_begin())
+// or a dedicated worker/task for OTA uploads so it stops sharing the pool
+// with the rest of the local/cloud API.
 static esp_err_t handle_post_ota(httpd_req_t *req)
 {
     if (!http_auth_check(req)) {

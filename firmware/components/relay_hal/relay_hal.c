@@ -43,6 +43,13 @@ esp_err_t relay_hal_init(const relay_hal_config_t *cfg)
     for (uint8_t i = 0; i < s_channel_count; i++) {
         s_pins[i] = cfg->gpio_pins[i];
 
+        // Pre-load the output register with the "off" level BEFORE the pin
+        // becomes an output (gpio_set_level works regardless of current
+        // direction), so it drives "off" from the instant gpio_config()
+        // switches it to OUTPUT mode — no intermediate glitch window at the
+        // direction switch itself.
+        gpio_set_level(s_pins[i], s_active_low ? 1 : 0);
+
         gpio_config_t io_conf = {
             .pin_bit_mask = 1ULL << s_pins[i],
             .mode = GPIO_MODE_OUTPUT,
@@ -57,7 +64,6 @@ esp_err_t relay_hal_init(const relay_hal_config_t *cfg)
         }
 
         s_state[i] = false;
-        gpio_set_level(s_pins[i], s_active_low ? 1 : 0); // drive to "off"
     }
 
     s_initialized = true;

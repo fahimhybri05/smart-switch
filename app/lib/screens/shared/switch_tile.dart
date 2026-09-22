@@ -6,8 +6,10 @@ import '../../models/device/channel_state.dart';
 import '../../models/device/switch_config.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
+import '../../theme/spacing.dart';
 import 'device_visualization.dart';
 import 'edit_switch_dialog.dart';
+import 'friendly_error.dart';
 
 /// One switch's live ON/OFF control tile — reused by Zones and Switches
 /// screens. Reads live state from [channelStatesProvider]'s 2s poll,
@@ -47,7 +49,15 @@ class SwitchTile extends ConsumerWidget {
         ? override == ChannelPowerState.on
         : polledIsOn;
     final isLoading = override == null && channelsAsync.isLoading;
-    final isOffline = override == null && channelsAsync.hasError;
+    // channelsAsync.hasError almost never fires in practice —
+    // channelStatesProvider swallows every poll failure into a successful
+    // `yield const []` so its retry loop can keep going (see that
+    // provider's doc comment) — so deviceUnreachableProvider is the real
+    // reachability signal; hasError is kept as a belt-and-suspenders check
+    // for the rare case the stream errors before that catch block runs.
+    final isOffline =
+        override == null &&
+        (channelsAsync.hasError || ref.watch(deviceUnreachableProvider(device)));
     final visualState = override != null
         ? DeviceVisualState.pending
         : isOffline
@@ -65,12 +75,16 @@ class SwitchTile extends ConsumerWidget {
           kind: _kindFor(switchConfig.name),
           state: visualState,
           height: 58,
-          onTap: isOffline ? null : () => _toggle(context, ref, !isOn),
+          onTap: isOffline || override != null
+              ? null
+              : () => _toggle(context, ref, !isOn),
         ),
       ),
       title: Text(
         switchConfig.name,
-        style: const TextStyle(fontWeight: FontWeight.w700),
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
       ),
       subtitle: Text(
         isOffline
@@ -80,6 +94,9 @@ class SwitchTile extends ConsumerWidget {
             : switchConfig.zone.trim().isEmpty
             ? device.friendlyName
             : '${device.friendlyName} • ${switchConfig.zone}',
+        style: isOffline
+            ? TextStyle(color: Theme.of(context).colorScheme.error)
+            : null,
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -89,9 +106,10 @@ class SwitchTile extends ConsumerWidget {
             tooltip: 'Rename / set zone',
             onPressed: () => _edit(context, ref),
           ),
+          const SizedBox(width: Spacing.xs),
           Switch(
             value: isOn,
-            onChanged: isOffline
+            onChanged: isOffline || override != null
                 ? null
                 : (value) => _toggle(context, ref, value),
           ),
@@ -115,9 +133,9 @@ class SwitchTile extends ConsumerWidget {
       await client.setChannelState(switchConfig.channelIdx, desired);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to toggle: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e, 'Toggle'))),
+        );
       }
     } finally {
       // Re-poll right away instead of waiting up to 2s for the next tick,
@@ -131,7 +149,7 @@ class SwitchTile extends ConsumerWidget {
     final result = await showEditSwitchDialog(context, switchConfig);
     if (result == null) return;
 
-    final (name, zone) = result;
+    final (name, zone, inputMode, inchingMs) = result;
     final client = ref.read(activeDeviceApiClientProvider(device));
     try {
       await client.upsertSwitch(
@@ -141,14 +159,16 @@ class SwitchTile extends ConsumerWidget {
           zone: zone,
           type: switchConfig.type,
           defaultBootState: switchConfig.defaultBootState,
+          inputMode: inputMode,
+          inchingMs: inchingMs,
         ),
       );
       ref.invalidate(deviceConfigProvider(device));
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e, 'Save'))),
+        );
       }
     }
   }

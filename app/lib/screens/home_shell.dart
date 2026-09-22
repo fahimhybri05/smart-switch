@@ -4,7 +4,6 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'groups/groups_screen.dart';
 import 'home/home_dashboard_screen.dart';
 import 'schedules/schedules_screen.dart';
-import 'scenes/scenes_screen.dart';
 import 'switches/switches_screen.dart';
 import '../theme/motion.dart';
 import 'zones/zones_screen.dart';
@@ -32,11 +31,6 @@ const _navEntries = <_NavEntry>[
     icon: Icons.group_work_outlined,
     selectedIcon: Icons.group_work,
     label: 'Groups',
-  ),
-  (
-    icon: Icons.auto_awesome_outlined,
-    selectedIcon: Icons.auto_awesome,
-    label: 'Scenes',
   ),
 ];
 
@@ -88,7 +82,6 @@ class _HomeShellState extends State<HomeShell> {
       const SwitchesScreen(),
       const SchedulesScreen(),
       const GroupsScreen(),
-      const ScenesScreen(),
     ];
 
     // IndexedStack (and its stable, keyless children) must never be rebuilt

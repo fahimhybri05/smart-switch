@@ -18,7 +18,6 @@ Future<void> main() async {
   final container = ProviderContainer();
   await container.read(deviceRegistryServiceProvider).init();
   await container.read(groupServiceProvider).init();
-  await container.read(sceneServiceProvider).init();
   await container.read(appSettingsServiceProvider).init();
   await container.read(authSessionServiceProvider).init();
 
@@ -27,6 +26,17 @@ Future<void> main() async {
   // even looks — not just after their next login. Fire-and-forget: never
   // blocks startup (see syncClaimedDevicesFromBackend's own doc comment).
   container.read(startupDeviceSyncProvider);
+
+  // Reactive, not one-shot: keeps re-subscribing to the WS push stream
+  // across login/logout/backend-url changes for the rest of the app's
+  // lifetime (see the provider's own doc comment).
+  container.read(channelStatePushListenerProvider);
+
+  // Same "read once at startup for a live Ref" pattern as the line above —
+  // keeps every known device's lastKnownIp fresh from ongoing mDNS
+  // discovery, not just the one-time add-device flow (see the provider's
+  // own doc comment).
+  container.read(mdnsIpRefreshProvider);
 
   // Best-effort — Android-only, no-op elsewhere (see background_monitor_service.dart).
   try {

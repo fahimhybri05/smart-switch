@@ -22,36 +22,50 @@ class IsolateBackendAuth {
   /// race window is narrow enough (WorkManager's 15min floor, sporadic
   /// widget taps) that it isn't worth a cross-isolate lock.
   static Future<String?> getValidAccessToken(String backendUrl) async {
+    // Headless isolate (widget tap / background monitor) opening the same
+    // `auth_session` box the main app isolate keeps open for its whole
+    // lifetime — Hive CE documents this as unsafe
+    // (`HiveWarning.unsafeIsolate`: independent per-isolate box caches can
+    // corrupt state). A full fix would route this through a platform
+    // channel back to the main isolate; out of scope for this pass.
+    // Mitigation: open, do the one read (and maybe a refresh-triggered
+    // write), close immediately via `finally` below — shrinks, doesn't
+    // eliminate, the window both isolates could have this box open at
+    // once.
     final box = await Hive.openBox(_authSessionBoxName);
-    final accessToken = box.get('access_token') as String?;
-    final refreshToken = box.get('refresh_token') as String?;
-    if (accessToken == null || refreshToken == null) {
-      return null;
-    }
-    if (!isJwtExpiredOrExpiringSoon(accessToken)) {
-      return accessToken;
-    }
     try {
-      final resp = await http
-          .post(
-            Uri.parse('$backendUrl/auth/refresh'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'refreshToken': refreshToken}),
-          )
-          .timeout(const Duration(seconds: 8));
-      if (resp.statusCode != 200) {
+      final accessToken = box.get('access_token') as String?;
+      final refreshToken = box.get('refresh_token') as String?;
+      if (accessToken == null || refreshToken == null) {
         return null;
       }
-      final json = jsonDecode(resp.body) as Map<String, dynamic>;
-      final newAccessToken = json['accessToken'] as String;
-      final newRefreshToken = json['refreshToken'] as String;
-      await box.putAll({
-        'access_token': newAccessToken,
-        'refresh_token': newRefreshToken,
-      });
-      return newAccessToken;
-    } catch (_) {
-      return null;
+      if (!isJwtExpiredOrExpiringSoon(accessToken)) {
+        return accessToken;
+      }
+      try {
+        final resp = await http
+            .post(
+              Uri.parse('$backendUrl/auth/refresh'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'refreshToken': refreshToken}),
+            )
+            .timeout(const Duration(seconds: 8));
+        if (resp.statusCode != 200) {
+          return null;
+        }
+        final json = jsonDecode(resp.body) as Map<String, dynamic>;
+        final newAccessToken = json['accessToken'] as String;
+        final newRefreshToken = json['refreshToken'] as String;
+        await box.putAll({
+          'access_token': newAccessToken,
+          'refresh_token': newRefreshToken,
+        });
+        return newAccessToken;
+      } catch (_) {
+        return null;
+      }
+    } finally {
+      await box.close();
     }
   }
 }

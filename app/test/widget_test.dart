@@ -29,6 +29,8 @@ class _FakeDeviceRegistryService implements DeviceRegistryService {
   Future<void> remove(String deviceId) async {}
   @override
   Future<void> updateLastKnownIp(String deviceId, String ip) async {}
+  @override
+  Future<void> close() async {}
 }
 
 class _FakeGroupService implements GroupService {
@@ -57,6 +59,8 @@ class _FakeAppSettingsService implements AppSettingsService {
   String? getBackendUrl() => null;
   @override
   Future<void> setBackendUrl(String url) async {}
+  @override
+  Future<void> close() async {}
 }
 
 class _FakeAuthSessionService implements AuthSessionService {

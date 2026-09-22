@@ -8,23 +8,27 @@
 #define SS_MAX_SCHEDULES 16
 
 typedef struct {
-    uint8_t channel_idx;
-    char    name[32];
-    char    zone[32];
-    char    type[8];               // "ON_OFF" (DIMMER reserved, spec §2)
-    char    default_boot_state[8]; // "OFF" | "ON" | "LAST"
+    uint8_t  channel_idx;
+    char     name[32];
+    char     zone[32];
+    char     type[8];               // "ON_OFF" (DIMMER reserved, spec §2)
+    char     default_boot_state[8]; // "OFF" | "ON" | "LAST"
+    char     input_mode[10];  // "DISABLED" | "TOGGLE" | "EDGE" — see relay_hal/physical_input
+    uint32_t inching_ms;      // 0 = disabled; ms before an ON channel auto-reverses to OFF
 } ss_switch_t;
 
 typedef struct {
     char     id[12];                 // "s-<n>", server-generated
     uint8_t  channel_idx;
     char     action[4];              // "ON" | "OFF"
-    char     type[10];               // "once" | "daily" | "weekly" | "countdown"
-    char     time[6];                // "HH:MM", clock types only ("" for countdown)
+    char     type[10];               // "once" | "daily" | "weekly" | "countdown" | "sunrise" | "sunset"
+    char     time[6];                // "HH:MM", clock types only ("" for countdown/sunrise/sunset)
     uint8_t  days_mask;              // bit0=Mon..bit6=Sun (ISO weekday-1); weekly only
     uint32_t duration_s;             // countdown only
     int64_t  countdown_started_at;   // unix epoch; internal-only, NOT part of spec §2
                                       // wire JSON — set by schedule_exec on create/re-arm
+    int16_t  solar_offset_min;       // minutes to shift the computed sunrise/sunset time;
+                                      // negative = before, positive = after; sunrise/sunset only
     bool     enabled;
 } ss_schedule_t;
 
@@ -52,6 +56,11 @@ typedef struct {
     char        static_gateway[16];
     char        static_subnet[16];
     char        static_dns[16];          // empty = fall back to static_gateway as DNS
+    bool        interlock_enabled;  // true: turning any channel ON forces every other channel OFF
+    double      latitude;
+    double      longitude;          // degrees, east-positive
+    bool        location_set;       // false until latitude/longitude explicitly configured —
+                                     // gates sunrise/sunset schedules
 } ss_config_t;
 
 // Mounts the LittleFS "storage" partition at /storage and loads (or creates
@@ -119,3 +128,15 @@ esp_err_t config_store_set_utc_offset(int16_t offset_min);
 // back to gateway).
 esp_err_t config_store_set_static_ip(bool enabled, const char *ip, const char *gateway,
                                       const char *subnet, const char *dns);
+
+// Sets whether turning any channel ON forces every other channel OFF
+// (mutually-exclusive relay group, e.g. motorized curtain/valve pairs).
+// Applied by channel_control, not relay_hal directly. Persists to flash
+// before returning ESP_OK.
+esp_err_t config_store_set_interlock(bool enabled);
+
+// Persists the device's geographic location (degrees, east-positive
+// longitude), used by schedule_exec to compute sunrise/sunset schedule
+// trigger times. Also sets location_set = true. Persists to flash before
+// returning ESP_OK.
+esp_err_t config_store_set_location(double latitude, double longitude); // also sets location_set = true

@@ -2,6 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+// `StateProvider`/`StateProvider.family` moved to Riverpod 3's "legacy" API
+// surface (still fully supported, just no longer in the default export) —
+// used below by `deviceUnreachableProvider`, the simplest fit for "a
+// sibling provider needs to flip one family member's bool from outside."
+import 'package:flutter_riverpod/legacy.dart';
 
 import '../models/device/channel_state.dart';
 import '../models/device/device_config.dart';
@@ -9,7 +14,6 @@ import '../models/local/automation.dart';
 import '../models/local/household.dart';
 import '../models/local/known_device.dart';
 import '../models/local/switch_group.dart';
-import '../models/local/smart_scene.dart';
 import '../services/app_settings_service.dart';
 import '../services/backend/auth_session_service.dart';
 import '../services/backend/backend_auth_client.dart';
@@ -25,7 +29,6 @@ import '../services/device_registry_service.dart';
 import '../services/device_transport.dart';
 import '../services/discovery_service.dart';
 import '../services/group_service.dart';
-import '../services/scene_service.dart';
 import '../services/zone_aggregation_service.dart';
 
 final deviceRegistryServiceProvider = Provider<DeviceRegistryService>(
@@ -33,36 +36,6 @@ final deviceRegistryServiceProvider = Provider<DeviceRegistryService>(
 );
 
 final groupServiceProvider = Provider<GroupService>((ref) => GroupService());
-
-final sceneServiceProvider = Provider<SceneService>((ref) => SceneService());
-
-class ScenesNotifier extends Notifier<List<SmartScene>> {
-  SceneService get _service => ref.read(sceneServiceProvider);
-
-  @override
-  List<SmartScene> build() {
-    _reload();
-    return const [];
-  }
-
-  Future<void> _reload() async {
-    state = await _service.getAll();
-  }
-
-  Future<void> upsert(SmartScene scene) async {
-    await _service.upsert(scene);
-    await _reload();
-  }
-
-  Future<void> remove(String id) async {
-    await _service.remove(id);
-    await _reload();
-  }
-}
-
-final scenesProvider = NotifierProvider<ScenesNotifier, List<SmartScene>>(
-  ScenesNotifier.new,
-);
 
 final backupServiceProvider = Provider<BackupService>((ref) => BackupService());
 
@@ -123,6 +96,15 @@ typedef AuthState = ({String email, String accessToken, String refreshToken})?;
 class AuthNotifier extends Notifier<AuthState> {
   AuthSessionService get _session => ref.read(authSessionServiceProvider);
 
+  /// Whether the current session should survive an app restart. Defaults to
+  /// `true` (today's long-standing behavior: every login/signup persists).
+  /// [AuthScreen]'s "Remember me" checkbox sets this to `false` to keep the
+  /// session in memory for this run only — [state] still holds the tokens
+  /// so the user isn't logged out mid-use, but nothing is written to
+  /// [AuthSessionService], so a fresh launch finds no saved session and
+  /// asks for credentials again.
+  bool _rememberMe = true;
+
   @override
   AuthState build() {
     final saved = _session.getSession();
@@ -144,22 +126,34 @@ class AuthNotifier extends Notifier<AuthState> {
     return BackendAuthClient(baseUrl: url);
   }
 
-  Future<void> login(String email, String password) async {
+  Future<void> login(
+    String email,
+    String password, {
+    bool rememberMe = true,
+  }) async {
+    _rememberMe = rememberMe;
     final tokens = await _client().login(email, password);
     await _persist(email, tokens);
   }
 
-  Future<void> signup(String email, String password) async {
+  Future<void> signup(
+    String email,
+    String password, {
+    bool rememberMe = true,
+  }) async {
+    _rememberMe = rememberMe;
     final tokens = await _client().signup(email, password);
     await _persist(email, tokens);
   }
 
   Future<void> _persist(String email, TokenPair tokens) async {
-    await _session.saveSession(
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      email: email,
-    );
+    if (_rememberMe) {
+      await _session.saveSession(
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        email: email,
+      );
+    }
     state = (
       email: email,
       accessToken: tokens.accessToken,
@@ -190,22 +184,46 @@ class AuthNotifier extends Notifier<AuthState> {
     }
     await _session.clear();
     state = null;
+    _rememberMe = true;
   }
+
+  /// De-dupes concurrent refresh attempts (see [refreshAccessToken]) — same
+  /// `??=`-an-in-flight-future idiom `BackendWsClient._connecting` uses for
+  /// concurrent `_ensureConnected()` calls (backend_ws_client.dart).
+  Future<String>? _refreshInFlight;
 
   /// Used by [ensureFreshAccessToken] — logs the user out if the refresh
   /// token itself turns out to be invalid/expired (matches the backend's
   /// rotate-on-use refresh design; there's no recovering from that client-side).
-  Future<String> refreshAccessToken() async {
+  ///
+  /// The backend's refresh tokens are single-use/rotate-on-use: two callers
+  /// racing this near-simultaneously (e.g. two screens both noticing the
+  /// access token is expiring) would otherwise each read the same old
+  /// refresh token and both call `refresh()` — whichever request the
+  /// backend sees second gets a 401 on an already-revoked token, and used
+  /// to spuriously [logout] the user even though the OTHER concurrent call
+  /// just succeeded. Sharing one in-flight attempt (`_refreshInFlight`)
+  /// instead of firing a new one per caller fixes that: every concurrent
+  /// caller awaits the same real refresh and sees the same outcome.
+  Future<String> refreshAccessToken() {
+    return _refreshInFlight ??= _doRefreshAccessToken().whenComplete(() {
+      _refreshInFlight = null;
+    });
+  }
+
+  Future<String> _doRefreshAccessToken() async {
     final current = state;
     if (current == null) {
       throw StateError('not logged in');
     }
     try {
       final tokens = await _client().refresh(current.refreshToken);
-      await _session.updateTokens(
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-      );
+      if (_rememberMe) {
+        await _session.updateTokens(
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+        );
+      }
       state = (
         email: current.email,
         accessToken: tokens.accessToken,
@@ -213,6 +231,8 @@ class AuthNotifier extends Notifier<AuthState> {
       );
       return tokens.accessToken;
     } catch (_) {
+      ref.read(sessionExpiredMessageProvider.notifier).state =
+          'Your session expired. Please sign in again.';
       await logout();
       rethrow;
     }
@@ -222,6 +242,15 @@ class AuthNotifier extends Notifier<AuthState> {
 final authProvider = NotifierProvider<AuthNotifier, AuthState>(
   AuthNotifier.new,
 );
+
+/// Set immediately before the forced [AuthNotifier.logout] call in
+/// [AuthNotifier._doRefreshAccessToken] fires (a failed token refresh —
+/// there's no recovering from that client-side) so [AuthScreen] can explain
+/// *why* the user was just bounced back to login instead of silently
+/// swapping screens with zero messaging. Read once by [AuthScreen] and
+/// cleared right after, so it doesn't reappear on a normal subsequent
+/// login/logout.
+final sessionExpiredMessageProvider = StateProvider<String?>((ref) => null);
 
 /// Returns a not-yet-expired access token, silently refreshing first if
 /// needed. Throws if the user isn't logged in.
@@ -276,6 +305,62 @@ final backendWsClientProvider = Provider<BackendWsClient?>((ref) {
 final discoveryServiceProvider = Provider<DiscoveryService>(
   (ref) => createDiscoveryService(),
 );
+
+/// Keeps [KnownDevice.lastKnownIp] fresh from *ongoing* mDNS discovery, not
+/// just the one-time add-device flow (`scan_devices_screen.dart`,
+/// `add_device_wizard_screen.dart`, `provisioning_wizard_screen.dart` are
+/// the only other writers of this field). Without this, a device's IP
+/// changing later (router reboot, DHCP lease renewal) left the cached IP
+/// permanently stale — every future local call would eat
+/// [LocalHttpTransport]'s full timeout before falling back to cloud (if
+/// configured) or just failing, until the user manually re-ran the
+/// add-device wizard.
+///
+/// Read once at startup (see main.dart) just to obtain a live [Ref] — same
+/// "read once for a live `Ref`" pattern as [channelStatePushListenerProvider]
+/// below. Stays reactive afterward because the mDNS stream itself is
+/// long-lived (continuous, not just while some explicit "scan" screen is
+/// open), and [knownDevicesProvider] is re-read fresh on every discovery
+/// event rather than captured once, so a device added after this provider
+/// was created is still covered. A plain (non-autoDispose) `Provider`, so
+/// it's never torn down once created — mirrors
+/// [channelStatePushListenerProvider].
+///
+/// Deliberately compares against every currently-known device on every
+/// discovery event (rather than, say, only devices with a null IP) so a
+/// *changed* IP is caught too, not just a previously-unknown one.
+final mdnsIpRefreshProvider = Provider<void>((ref) {
+  final discovery = ref.watch(discoveryServiceProvider);
+  final sub = discovery.startDiscovery().listen((discovered) {
+    final known = ref.read(knownDevicesProvider);
+    for (final device in known) {
+      if (device.deviceId == discovered.deviceId &&
+          device.lastKnownIp != discovered.host) {
+        unawaited(
+          ref
+              .read(knownDevicesProvider.notifier)
+              .updateLastKnownIp(device.deviceId, discovered.host)
+              .then((_) {
+                // activeDeviceApiClientProvider is a plain (non-autoDispose)
+                // Provider.family keyed by KnownDevice, whose equality is
+                // deviceId-only (see known_device.dart) — so once built for
+                // a device, its DeviceApiClient/LocalHttpTransport keeps
+                // the OLD baseUrl baked in forever, regardless of the
+                // updated lastKnownIp above, unless explicitly invalidated
+                // here. This cascades: anything currently `ref.watch`ing
+                // it (channelStatesProvider, deviceConfigProvider) gets
+                // marked outdated and rebuilds against the fresh IP too —
+                // without this, the new IP would only take effect after
+                // the app is fully restarted (a fresh ProviderContainer),
+                // which defeats the point of a live mDNS refresh.
+                ref.invalidate(activeDeviceApiClientProvider(device));
+              }),
+        );
+      }
+    }
+  });
+  ref.onDispose(sub.cancel);
+});
 
 final zoneAggregationServiceProvider = Provider<ZoneAggregationService>(
   (ref) => ZoneAggregationService(),
@@ -826,23 +911,63 @@ final deviceConfigProvider = FutureProvider.autoDispose
       return client.getConfig();
     });
 
-/// Polls GET /api/channels every 2s (spec §6's short-poll) for exactly as
-/// long as some screen is watching it — autoDispose cancels the loop the
-/// instant nothing does, satisfying "only poll the zone currently on screen"
-/// without any manual start/stop wiring in the screens themselves.
-const _channelPollIntervalLocal = Duration(seconds: 2);
-const _channelPollIntervalCloudBackoff = Duration(seconds: 6);
+/// Polls GET /api/channels for exactly as long as some screen is watching
+/// it — autoDispose cancels the loop the instant nothing does, satisfying
+/// "only poll the zone currently on screen" without any manual start/stop
+/// wiring in the screens themselves.
+///
+/// [_channelPollIntervalLocalNoPush] is spec §6's original short-poll,
+/// still used when there's no backend/login at all — polling is the *only*
+/// freshness signal in that setup (no WS push exists to fall back on).
+/// [_channelPollIntervalLocalWithPush] applies whenever a
+/// [backendWsClientProvider] exists: `channelStatePushListenerProvider`
+/// already invalidates this same provider the instant a real state change
+/// is pushed (see service_providers.dart), including for LAN-local changes
+/// — every firmware state change goes through channel_control /
+/// cloudClientNotifyStateChanged regardless of what triggered it (app,
+/// schedule, physical button), so the device's own cloud tunnel relays it
+/// up and back down to every household member's phone even when both are
+/// on the same LAN. This periodic poll is then mostly a reachability
+/// heartbeat, not the primary freshness path, so it can run much less
+/// often — cuts battery/data/server load with no responsiveness loss.
+const _channelPollIntervalLocalNoPush = Duration(seconds: 2);
+const _channelPollIntervalLocalWithPush = Duration(seconds: 5);
+const _channelPollIntervalCloudBackoff = Duration(seconds: 8);
 
 /// Consecutive cloud-served polls (see
 /// [FallbackDeviceTransport.lastServedByCloud]) before the poll interval
-/// widens from 2s to ~6s — a couple of cloud polls in a row is a decent
-/// signal the phone is genuinely off-LAN right now, not just one flaky LAN
-/// hiccup.
+/// widens further to [_channelPollIntervalCloudBackoff] — a couple of cloud
+/// polls in a row is a decent signal the phone is genuinely off-LAN right
+/// now, not just one flaky LAN hiccup.
 const _cloudBackoffThreshold = 3;
+
+/// Consecutive [DeviceApiClient.getChannels] failures before
+/// [deviceUnreachableProvider] flips to `true` — 2, not 1, so a single
+/// one-off LAN blip doesn't flag a device as offline. Flips back to
+/// `false` the instant a single poll succeeds again.
+const _deviceUnreachableThreshold = 2;
+
+/// Sibling reachability signal for [channelStatesProvider] — that
+/// provider's own `AsyncValue` can never be trusted to surface a poll
+/// failure as an `AsyncError` (see its doc comment below: every failure is
+/// swallowed into `yield const []`, a *successful* empty list, precisely so
+/// the polling loop can keep retrying instead of the stream terminating
+/// permanently). Without a separate signal, downstream `hasError` checks
+/// in switch_tile.dart/device_tile.dart/groups_screen.dart (which gate an
+/// "Offline" UI treatment) effectively never fired again after the first
+/// successful poll — a genuinely offline device just showed as a plain,
+/// controllable "Off" switch. Written to from within
+/// [channelStatesProvider]'s own loop below; a plain `StateProvider.family`
+/// is the simplest thing that lets a sibling provider flip one family
+/// member's value from outside.
+final deviceUnreachableProvider = StateProvider.family<bool, KnownDevice>(
+  (ref, device) => false,
+);
 
 final channelStatesProvider = StreamProvider.autoDispose
     .family<List<ChannelState>, KnownDevice>((ref, device) async* {
       final client = ref.watch(activeDeviceApiClientProvider(device));
+      final pushAvailable = ref.watch(backendWsClientProvider) != null;
       // Only a FallbackDeviceTransport can ever report "served by cloud" —
       // a cloud-only or local-only client (see activeDeviceApiClientProvider)
       // has no such signal, so the backoff below simply never engages for
@@ -850,9 +975,15 @@ final channelStatesProvider = StreamProvider.autoDispose
       // there's no "local" to snap back to for a cloud-only client anyway.
       final transport = client.transport;
       var consecutiveCloudPolls = 0;
+      var consecutiveFailures = 0;
       while (true) {
         try {
-          yield await client.getChannels();
+          final channels = await client.getChannels();
+          consecutiveFailures = 0;
+          if (ref.read(deviceUnreachableProvider(device))) {
+            ref.read(deviceUnreachableProvider(device).notifier).state = false;
+          }
+          yield channels;
           final servedByCloud = transport is FallbackDeviceTransport
               ? transport.lastServedByCloud
               : null;
@@ -862,15 +993,64 @@ final channelStatesProvider = StreamProvider.autoDispose
             consecutiveCloudPolls = 0;
           }
         } catch (_) {
+          consecutiveFailures++;
+          if (consecutiveFailures >= _deviceUnreachableThreshold) {
+            ref.read(deviceUnreachableProvider(device).notifier).state = true;
+          }
           yield const [];
         }
-        await Future.delayed(
-          consecutiveCloudPolls >= _cloudBackoffThreshold
-              ? _channelPollIntervalCloudBackoff
-              : _channelPollIntervalLocal,
-        );
+        final Duration interval;
+        if (consecutiveCloudPolls >= _cloudBackoffThreshold) {
+          interval = _channelPollIntervalCloudBackoff;
+        } else if (pushAvailable) {
+          interval = _channelPollIntervalLocalWithPush;
+        } else {
+          interval = _channelPollIntervalLocalNoPush;
+        }
+        await Future.delayed(interval);
       }
     });
+
+/// Consumes [BackendWsClient.stateChanges] pushes and invalidates the
+/// pushed device's [channelStatesProvider] immediately, instead of leaving
+/// it to the next poll tick (up to 2s, or up to 6s under cloud backoff) —
+/// this is what actually uses the WS push the backend already sends on
+/// every confirmed state change, rather than relying purely on polling.
+/// Read once at startup (see main.dart) just to obtain a live [Ref]; stays
+/// reactive afterward because it `ref.watch`es [backendWsClientProvider]
+/// itself, so a login/logout/backend-url change re-subscribes to the new
+/// socket. A plain (non-autoDispose) `Provider`, so it's never torn down
+/// once created.
+final channelStatePushListenerProvider = Provider<void>((ref) {
+  final wsClient = ref.watch(backendWsClientProvider);
+  if (wsClient == null) {
+    return;
+  }
+
+  final sub = wsClient.stateChanges.listen((msg) {
+    if (msg['event'] != 'state_changed') {
+      return;
+    }
+    final deviceId = msg['deviceId'] as String?;
+    if (deviceId == null) {
+      return;
+    }
+    // Only deviceId matters for the family lookup — KnownDevice's equality
+    // is deviceId-only (see known_device.dart), so this synthetic instance
+    // matches whichever real KnownDevice a screen is already watching.
+    ref.invalidate(
+      channelStatesProvider(
+        KnownDevice(
+          deviceId: deviceId,
+          mdnsHostname: null,
+          lastKnownIp: null,
+          friendlyName: '',
+        ),
+      ),
+    );
+  });
+  ref.onDispose(sub.cancel);
+});
 
 typedef ChannelOverrideKey = (String deviceId, int channelIdx);
 
@@ -878,12 +1058,31 @@ typedef ChannelOverrideKey = (String deviceId, int channelIdx);
 /// tapped so tiles flip immediately instead of waiting for the next
 /// [channelStatesProvider] poll tick (up to 2s away) on top of the HTTP
 /// round-trip — that combined wait was the main source of "toggling feels
-/// slow" (see docs/plan.md). Cleared automatically after [_overrideTtl]
-/// regardless of outcome, so a failed/reverted command can't leave a tile
-/// stuck showing the wrong state — by then the caller's forced
-/// `ref.invalidate(channelStatesProvider(device))` (see every `_toggle`)
-/// has long since delivered the real, confirmed value anyway.
-const _channelOverrideTtl = Duration(seconds: 4);
+/// slow" (see docs/plan.md). Cleared automatically after
+/// [_channelOverrideTtl] regardless of outcome, so a failed/reverted
+/// command can't leave a tile stuck showing the wrong state — by then the
+/// caller's forced `ref.invalidate(channelStatesProvider(device))` (see
+/// every `_toggle`) has long since delivered the real, confirmed value
+/// anyway.
+///
+/// Set comfortably above the slowest realistic transport path a toggle can
+/// take — `LocalHttpTransport`'s 5s timeout falling back to
+/// `CloudRelayTransport` (`BackendWsClient.sendCommand`'s 10s timeout) is
+/// up to ~15s worst case. Previously 4s — shorter than every one of those
+/// transports' own timeouts — which meant any toggle slower than 4s had
+/// its optimistic override expire *before* the real result landed and
+/// before the forced re-poll above resolved: the tile flickered back to
+/// the stale pre-toggle state, then flipped again once the real result
+/// arrived, looking like a silent failure on perfectly ordinary
+/// slow-LAN/cloud-fallback toggles. This TTL is only a ceiling/fallback
+/// for a genuinely stuck command — the `finally` block's
+/// invalidate-on-completion above already corrects the display the moment
+/// the real result is known, well before this fires in the normal case —
+/// so a longer value just means a truly-stuck command shows the
+/// optimistic (possibly wrong) state a little longer before reverting,
+/// which is strictly better than reverting to the wrong stale state
+/// mid-flight.
+const _channelOverrideTtl = Duration(seconds: 16);
 
 class ChannelOverrideNotifier
     extends Notifier<Map<ChannelOverrideKey, ChannelPowerState>> {

@@ -100,10 +100,18 @@ class DeviceApiClient {
   }
 
   Future<Schedule> upsertSchedule(Schedule schedule) async {
+    // Schedule CREATION (empty id) is not idempotent — a local timeout is
+    // ambiguous (the device may have already created it), so a blind cloud
+    // retry after that timeout risks a second, duplicate schedule (see
+    // device_transport.dart's FallbackDeviceTransport doc comment / Fix 6).
+    // A local timeout on an UPDATE (non-empty id) is naturally idempotent
+    // (same id, same final state) so it keeps the normal fallback-on-
+    // timeout behavior.
     final resp = await _transport.send(
       'POST',
       '/api/schedules',
       body: schedule.toJson(),
+      allowFallbackAfterTimeout: schedule.id.isNotEmpty,
     );
     return Schedule.fromJson(await _decodeOrThrow(resp));
   }
@@ -153,6 +161,30 @@ class DeviceApiClient {
       body: {'utc_offset_min': offsetMinutes},
     );
     await _decodeOrThrow(resp);
+  }
+
+  /// POST /api/settings — interlock and/or location, independently
+  /// optional (pass only what changed; the device leaves the other
+  /// unspecified fields untouched). Passing exactly one of [latitude]/
+  /// [longitude] without the other is a client-side error the device
+  /// rejects with a 400 — always supply both together. Returns the
+  /// resulting, persisted `{interlock_enabled, latitude, longitude,
+  /// location_set}`.
+  Future<Map<String, dynamic>> setDeviceSettings({
+    bool? interlockEnabled,
+    double? latitude,
+    double? longitude,
+  }) async {
+    final resp = await _transport.send(
+      'POST',
+      '/api/settings',
+      body: {
+        'interlock_enabled': ?interlockEnabled,
+        'latitude': ?latitude,
+        'longitude': ?longitude,
+      },
+    );
+    return _decodeOrThrow(resp);
   }
 
   /// Switches the device to a fixed IP (or back to DHCP with [mode]

@@ -49,10 +49,54 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 // own already-running local HTTP server (http_api_start(), main.c) and
 // sends the real response back up the cloud tunnel as {reqId, status, body}.
 // No handler logic is duplicated — see docs/plan.md.
+// Sends a {reqId, status, body:null} failure reply over the cloud tunnel
+// without ever touching the local loopback HTTP client — used whenever
+// proxy_and_reply() must bail out before (or instead of) actually issuing
+// the loopback request, e.g. a rejected/invalid path or a failed client init.
+static void reply_failure(const char *req_id, int status)
+{
+    cJSON *reply = cJSON_CreateObject();
+    cJSON_AddStringToObject(reply, "reqId", req_id);
+    cJSON_AddNumberToObject(reply, "status", status);
+    cJSON_AddItemToObject(reply, "body", cJSON_CreateNull());
+
+    char *reply_str = cJSON_PrintUnformatted(reply);
+    cJSON_Delete(reply);
+    if (reply_str != NULL && s_client != NULL) {
+        esp_websocket_client_send_text(s_client, reply_str, strlen(reply_str), pdMS_TO_TICKS(2000));
+    }
+    free(reply_str);
+}
+
+// path is backend-controlled (relayed over the cloud WS tunnel to every
+// connected device) — reject anything that isn't a plain local path before
+// it's ever concatenated into the loopback URL. In particular reject a
+// "://" anywhere in it, which would otherwise let a crafted path smuggle a
+// different scheme/host into the composed "http://127.0.0.1<path>" URL.
+static bool path_is_safe_local(const char *path)
+{
+    return path != NULL && path[0] == '/' && strstr(path, "://") == NULL;
+}
+
+// Proxies one relayed {reqId, method, path, body} command to the device's
+// own already-running local HTTP server (http_api_start(), main.c) and
+// sends the real response back up the cloud tunnel as {reqId, status, body}.
+// No handler logic is duplicated — see docs/plan.md.
 static void proxy_and_reply(const char *req_id, const char *method, const char *path, const cJSON *body)
 {
+    if (!path_is_safe_local(path)) {
+        ESP_LOGW(TAG, "rejected relayed command with unsafe path: %s", path ? path : "(null)");
+        reply_failure(req_id, 400);
+        return;
+    }
+
     char url[160];
-    snprintf(url, sizeof(url), "http://127.0.0.1%s", path);
+    int n = snprintf(url, sizeof(url), "http://127.0.0.1%s", path);
+    if (n < 0 || (size_t)n >= sizeof(url)) {
+        ESP_LOGW(TAG, "rejected relayed command with oversized path");
+        reply_failure(req_id, 400);
+        return;
+    }
 
     esp_http_client_method_t http_method;
     if (strcmp(method, "GET") == 0) {
@@ -63,6 +107,7 @@ static void proxy_and_reply(const char *req_id, const char *method, const char *
         http_method = HTTP_METHOD_DELETE;
     } else {
         ESP_LOGW(TAG, "unsupported relayed method: %s", method);
+        reply_failure(req_id, 400);
         return;
     }
 
@@ -72,6 +117,7 @@ static void proxy_and_reply(const char *req_id, const char *method, const char *
         .len = 0,
     };
     if (rb.buf == NULL) {
+        reply_failure(req_id, 500);
         return;
     }
     rb.buf[0] = '\0';
@@ -84,6 +130,16 @@ static void proxy_and_reply(const char *req_id, const char *method, const char *
         .user_data = &rb,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        // Guards against a NULL-pointer dereference below: if URL
+        // composition/parsing ever fails, esp_http_client_init() returns
+        // NULL. Since one backend push reaches every connected device, an
+        // unchecked NULL here would crash/reboot the whole fleet at once.
+        ESP_LOGE(TAG, "esp_http_client_init failed for relayed request (path=%s)", path);
+        free(rb.buf);
+        reply_failure(req_id, 500);
+        return;
+    }
 
     char *body_str = NULL;
     if (body != NULL && !cJSON_IsNull(body)) {

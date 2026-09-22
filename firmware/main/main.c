@@ -10,12 +10,14 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "channel_control.h"
 #include "cloud_client.h"
 #include "config_store.h"
 #include "ds3231.h"
 #include "http_api.h"
 #include "mdns_advertise.h"
 #include "ota.h"
+#include "physical_input.h"
 #include "provisioning.h"
 #include "recovery_button.h"
 #include "relay_hal.h"
@@ -134,6 +136,8 @@ void app_main(void)
              s_cfg.device_id, s_cfg.cloud_secret);
 
     init_relays_from_config(&s_cfg);
+    ESP_ERROR_CHECK(channel_control_init());
+    ESP_ERROR_CHECK(physical_input_init());
     init_i2c_and_rtc();
 
     ESP_ERROR_CHECK(provisioning_init(s_cfg.device_id));

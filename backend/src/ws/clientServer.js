@@ -61,29 +61,37 @@ export function handleClientConnection(ws, userId) {
     } catch {
       return;
     }
-    const { reqId, deviceId, method, path, body } = msg;
-    if (!reqId || !deviceId || !method || !path) {
-      return;
-    }
 
-    if (!(await isOwnedByUser(deviceId, userId))) {
-      return ws.send(JSON.stringify({ reqId, status: 0, error: 'not_found' }));
+    try {
+      const { reqId, deviceId, method, path, body } = msg;
+      if (!reqId || !deviceId || !method || !path) {
+        return;
+      }
+
+      if (!(await isOwnedByUser(deviceId, userId))) {
+        return ws.send(JSON.stringify({ reqId, status: 0, error: 'not_found' }));
+      }
+      if (!isDeviceOnline(deviceId)) {
+        return ws.send(JSON.stringify({ reqId, status: 0, error: 'device_offline' }));
+      }
+      // msg.source is a new optional, self-reported, trusted-not-verified
+      // field the app sets to 'group'/'scene' when it knows the semantic
+      // origin of a relayed command — informational only for activity
+      // history, not a security boundary. See docs/plan.md.
+      const match = typeof path === 'string' && path.match(CHANNEL_STATE_PATH);
+      if (match && body?.state) {
+        noteExpectedStateChange(deviceId, Number(match[1]), body.state, {
+          source: msg.source ?? 'app',
+          actorUserId: userId,
+        });
+      }
+      relayToDevice(deviceId, { method, path, body }, ws, reqId);
+    } catch (err) {
+      // Express-async-errors doesn't cover WS event handlers — an unhandled
+      // rejection here would otherwise crash the whole process (see
+      // server.js's process-level safety net for the last-resort backstop).
+      console.error(`client message handler failed for user ${userId}`, err);
     }
-    if (!isDeviceOnline(deviceId)) {
-      return ws.send(JSON.stringify({ reqId, status: 0, error: 'device_offline' }));
-    }
-    // msg.source is a new optional, self-reported, trusted-not-verified
-    // field the app sets to 'group'/'scene' when it knows the semantic
-    // origin of a relayed command — informational only for activity
-    // history, not a security boundary. See docs/plan.md.
-    const match = typeof path === 'string' && path.match(CHANNEL_STATE_PATH);
-    if (match && body?.state) {
-      noteExpectedStateChange(deviceId, Number(match[1]), body.state, {
-        source: msg.source ?? 'app',
-        actorUserId: userId,
-      });
-    }
-    relayToDevice(deviceId, { method, path, body }, ws, reqId);
   });
 
   ws.on('close', () => unregisterClient(userId, ws));

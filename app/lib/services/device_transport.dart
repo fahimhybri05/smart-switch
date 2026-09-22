@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -20,10 +21,18 @@ class DeviceTransportResponse {
 /// see this — `DeviceApiClient`'s public methods/signatures are unchanged
 /// either way (see docs/plan.md).
 abstract class DeviceTransport {
+  /// [allowFallbackAfterTimeout] only matters to [FallbackDeviceTransport]
+  /// (every other implementation ignores it) — see that class's doc
+  /// comment. Defaults to `true`, matching every call site's existing
+  /// behavior except `DeviceApiClient.upsertSchedule`'s create path (see
+  /// device_api_client.dart), which is the one call where a local timeout
+  /// is ambiguous enough (may have already been processed) that blindly
+  /// retrying over cloud risks creating a duplicate resource.
   Future<DeviceTransportResponse> send(
     String method,
     String path, {
     Object? body,
+    bool allowFallbackAfterTimeout = true,
   });
 }
 
@@ -59,6 +68,7 @@ class LocalHttpTransport implements DeviceTransport {
     String method,
     String path, {
     Object? body,
+    bool allowFallbackAfterTimeout = true,
   }) async {
     final uri = _uri(path);
     final headers = _headers(json: body != null);
@@ -111,6 +121,7 @@ class CloudRelayTransport implements DeviceTransport {
     String method,
     String path, {
     Object? body,
+    bool allowFallbackAfterTimeout = true,
   }) => sendCommand(deviceId, method, path, body);
 }
 
@@ -141,6 +152,7 @@ class RestRelayTransport implements DeviceTransport {
     String method,
     String path, {
     Object? body,
+    bool allowFallbackAfterTimeout = true,
   }) async {
     final resp = await http
         .post(
@@ -194,14 +206,31 @@ class FallbackDeviceTransport implements DeviceTransport {
     String method,
     String path, {
     Object? body,
+    bool allowFallbackAfterTimeout = true,
   }) async {
     try {
       final resp = await local.send(method, path, body: body);
       lastServedByCloud = false;
       return resp;
-    } catch (_) {
+    } catch (e) {
       final cloudTransport = cloud;
       if (cloudTransport == null) {
+        rethrow;
+      }
+      // [local]'s own `.timeout()` (see LocalHttpTransport) only stops
+      // *waiting* for the underlying HTTP request — it never cancels it.
+      // For most calls that's harmless to retry over cloud (a non-timeout
+      // failure like connection-refused unambiguously never reached the
+      // device, and even a timed-out idempotent call is safe to repeat).
+      // But for a non-idempotent call whose caller passed
+      // `allowFallbackAfterTimeout: false` (see
+      // DeviceApiClient.upsertSchedule's create path), a local TIMEOUT
+      // specifically is ambiguous — the device may have already received
+      // and processed the first request — so retrying over cloud here
+      // risks silently duplicating it. Surface the original timeout
+      // instead and let the caller's own error handling report it; the
+      // user can safely retry by hand (they'd see the result missing).
+      if (!allowFallbackAfterTimeout && e is TimeoutException) {
         rethrow;
       }
       final resp = await cloudTransport.send(method, path, body: body);

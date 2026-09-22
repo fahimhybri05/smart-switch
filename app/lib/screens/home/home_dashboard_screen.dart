@@ -8,6 +8,7 @@ import '../../models/local/household.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../routing/app_routes.dart';
+import '../../theme/app_theme.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
 import '../shared/device_sync_gate.dart';
@@ -89,14 +90,9 @@ class HomeDashboardScreen extends ConsumerWidget {
     }
 
     var totalSwitches = 0;
-    var onCount = 0;
     final tiles = <Widget>[];
     for (final (device, config) in deviceConfigs) {
       totalSwitches += config.switches.length;
-      final channelsAsync = ref.watch(channelStatesProvider(device));
-      channelsAsync.whenData((states) {
-        onCount += states.where((s) => s.state == ChannelPowerState.on).length;
-      });
       for (final sw in config.switches) {
         final tileIndex = tiles.length;
         tiles.add(
@@ -132,7 +128,7 @@ class HomeDashboardScreen extends ConsumerWidget {
                   Text(
                     'My home',
                     style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
+                      color: colorScheme.primary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -165,11 +161,14 @@ class HomeDashboardScreen extends ConsumerWidget {
                 0,
               ),
               sliver: SliverToBoxAdapter(
-                child: _OverviewHero(
-                  onlineDevices: onlineDevices,
-                  offlineDevices: offlineDevices,
-                  onCount: onCount,
-                  totalSwitches: totalSwitches,
+                child: _LiveOnCount(
+                  deviceConfigs: deviceConfigs,
+                  builder: (context, onCount) => _OverviewHero(
+                    onlineDevices: onlineDevices,
+                    offlineDevices: offlineDevices,
+                    onCount: onCount,
+                    totalSwitches: totalSwitches,
+                  ),
                 ),
               ),
             ),
@@ -190,49 +189,56 @@ class HomeDashboardScreen extends ConsumerWidget {
                         ),
                         _StatusPill(
                           icon: offlineDevices == 0
-                              ? Icons.wifi_rounded
+                              ? Icons.bolt_rounded
                               : Icons.warning_amber_rounded,
                           label: offlineDevices == 0
                               ? '$onlineDevices online'
                               : '$offlineDevices offline',
                           color: offlineDevices == 0
-                              ? colorScheme.primary
+                              ? colorScheme.tertiary
                               : colorScheme.error,
                         ),
                       ],
                     ),
                     const SizedBox(height: Spacing.md),
-                    Text(
-                      totalSwitches == 0
-                          ? '${devices.length} device(s) connected'
-                          : '$onCount of $totalSwitches switches on',
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
+                    _LiveOnCount(
+                      deviceConfigs: deviceConfigs,
+                      builder: (context, onCount) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            totalSwitches == 0
+                                ? '${devices.length} device(s) connected'
+                                : '$onCount of $totalSwitches switches on',
+                            style: Theme.of(context).textTheme.bodyLarge
+                                ?.copyWith(color: colorScheme.onSurfaceVariant),
+                          ),
+                          if (totalSwitches > 0) ...[
+                            const SizedBox(height: Spacing.xs),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: TweenAnimationBuilder<double>(
+                                duration: Motion.slow,
+                                tween: Tween(
+                                  begin: 0,
+                                  end: onCount / totalSwitches,
+                                ),
+                                builder: (context, value, _) =>
+                                    LinearProgressIndicator(
+                                      value: value,
+                                      minHeight: 6,
+                                      backgroundColor:
+                                          colorScheme.surfaceContainerHighest,
+                                    ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                    if (totalSwitches > 0) ...[
-                      const SizedBox(height: Spacing.xs),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: TweenAnimationBuilder<double>(
-                          duration: const Duration(milliseconds: 400),
-                          tween: Tween(begin: 0, end: onCount / totalSwitches),
-                          builder: (context, value, _) =>
-                              LinearProgressIndicator(
-                                value: value,
-                                minHeight: 6,
-                                backgroundColor:
-                                    colorScheme.surfaceContainerHighest,
-                              ),
-                        ),
-                      ),
-                    ],
                     if (zones.isNotEmpty) ...[
                       const SizedBox(height: Spacing.lg),
-                      Text(
-                        'Rooms',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
+                      const _SectionLabel('Rooms'),
                       const SizedBox(height: Spacing.sm),
                       SizedBox(
                         height: 72,
@@ -250,10 +256,7 @@ class HomeDashboardScreen extends ConsumerWidget {
                       ),
                     ],
                     const SizedBox(height: Spacing.lg),
-                    Text(
-                      'Devices',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
+                    const _SectionLabel('Devices'),
                     const SizedBox(height: Spacing.sm),
                   ],
                 ),
@@ -265,7 +268,27 @@ class HomeDashboardScreen extends ConsumerWidget {
                   ? SliverToBoxAdapter(
                       child: anyConfigLoading
                           ? const SkeletonGridPlaceholder()
-                          : const Text('No switches labeled yet.'),
+                          : Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: Spacing.lg,
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.toggle_off_outlined,
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                                  const SizedBox(width: Spacing.sm),
+                                  Text(
+                                    'No switches labeled yet.',
+                                    style: Theme.of(context).textTheme.bodyMedium
+                                        ?.copyWith(
+                                          color: colorScheme.onSurfaceVariant,
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            ),
                     )
                   : SliverGrid(
                       gridDelegate:
@@ -417,6 +440,23 @@ class _InviteBannerState extends ConsumerState<_InviteBanner> {
   }
 }
 
+/// A plain Material section header — a short sentence-case label.
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: Theme.of(
+        context,
+      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+    );
+  }
+}
+
 class _StatusPill extends StatelessWidget {
   const _StatusPill({
     required this.icon,
@@ -433,7 +473,7 @@ class _StatusPill extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
+        color: color.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Padding(
@@ -457,6 +497,37 @@ class _StatusPill extends StatelessWidget {
   }
 }
 
+/// Isolates the per-poll-tick rebuild caused by [channelStatesProvider] to
+/// just this small subtree, instead of the whole dashboard screen.
+///
+/// [channelStatesProvider] polls every device roughly every 2s (see
+/// service_providers.dart's `_channelPollIntervalLocalNoPush`/`WithPush`).
+/// `DeviceTile` already scopes its own watch of that provider per-tile, but
+/// the on/off summary count needs to fold it across every device — watching
+/// it directly in the screen's top-level `build()` would rebuild the entire
+/// screen (header, zone chips, grid) on every tick for any device. Wrapping
+/// just the summary-consuming widgets in this `ConsumerWidget` confines that
+/// rebuild to here; everything built by [builder] is the only part that
+/// re-renders on each tick.
+class _LiveOnCount extends ConsumerWidget {
+  const _LiveOnCount({required this.deviceConfigs, required this.builder});
+
+  final List<(KnownDevice, DeviceConfig)> deviceConfigs;
+  final Widget Function(BuildContext context, int onCount) builder;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    var onCount = 0;
+    for (final (device, _) in deviceConfigs) {
+      final channelsAsync = ref.watch(channelStatesProvider(device));
+      channelsAsync.whenData((states) {
+        onCount += states.where((s) => s.state == ChannelPowerState.on).length;
+      });
+    }
+    return builder(context, onCount);
+  }
+}
+
 class _OverviewHero extends StatelessWidget {
   const _OverviewHero({
     required this.onlineDevices,
@@ -473,6 +544,7 @@ class _OverviewHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final panelColors = context.panelColors;
     final needsAttention = offlineDevices > 0;
     final activeLabel = totalSwitches == 0
         ? 'No switches yet'
@@ -484,17 +556,11 @@ class _OverviewHero extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            colorScheme.primary,
-            Color.alphaBlend(
-              colorScheme.tertiary.withValues(alpha: 0.3),
-              colorScheme.primary,
-            ),
-          ],
+          colors: [panelColors.accent, panelColors.accentStrong],
         ),
         boxShadow: [
           BoxShadow(
-            color: colorScheme.primary.withValues(alpha: 0.18),
+            color: colorScheme.primary.withValues(alpha: 0.28),
             blurRadius: 24,
             offset: const Offset(0, 10),
           ),
@@ -531,12 +597,21 @@ class _OverviewHero extends StatelessWidget {
                     ],
                   ),
                 ),
-                Icon(
-                  needsAttention
-                      ? Icons.notifications_active_rounded
-                      : Icons.auto_awesome_rounded,
-                  color: colorScheme.onPrimary.withValues(alpha: 0.9),
-                  size: 28,
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: colorScheme.onPrimary.withValues(alpha: 0.18),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(Spacing.sm),
+                    child: Icon(
+                      needsAttention
+                          ? Icons.notifications_active_rounded
+                          : Icons.bolt_rounded,
+                      color: colorScheme.onPrimary,
+                      size: 22,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -624,33 +699,43 @@ class _ZoneChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Material(
-      color: colorScheme.secondaryContainer,
-      borderRadius: BorderRadius.circular(20),
+      color: colorScheme.surfaceContainerHigh,
+      borderRadius: BorderRadius.circular(16),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        child: Padding(
+        child: Container(
           padding: const EdgeInsets.symmetric(
             horizontal: Spacing.md,
             vertical: Spacing.sm,
           ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                name,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: colorScheme.onSecondaryContainer,
-                ),
+              Icon(
+                Icons.meeting_room_outlined,
+                size: 18,
+                color: colorScheme.primary,
               ),
-              Text(
-                '$count switch(es)',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSecondaryContainer.withValues(
-                    alpha: 0.8,
+              const SizedBox(width: Spacing.sm),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: colorScheme.onSurface,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
+                  Text(
+                    '$count switch(es)',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

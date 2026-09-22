@@ -1,5 +1,5 @@
 name: smart_switch
-description: "Smart Switch IoT platform — serverless Flutter app for ESP32/8266 relay nodes"
+description: "Smart Switch IoT platform — Flutter app for ESP32/8266 relay nodes, with local LAN control and optional backend-relayed remote access"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -49,6 +49,7 @@ dependencies:
   pointycastle: ^4.0.0
   web_socket_channel: ^3.0.3
   mobile_scanner: ^7.4.1
+  google_fonts: ^8.2.1
 
 dev_dependencies:
   flutter_test:

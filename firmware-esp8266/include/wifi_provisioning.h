@@ -24,7 +24,11 @@ void wifiProvisioningBegin();
 // Must be called every loop() iteration — drives the deferred
 // connect-and-possibly-roll-back state machine (can't act on a new
 // SSID/password synchronously inside the HTTP handler that received it,
-// same reasoning as the ESP32 firmware's 700ms defer).
+// same reasoning as the ESP32 firmware's 700ms defer). Also drives a
+// separate, automatic background retry of the already-stored credentials
+// while the device is stuck in AP-only fallback since boot (self-heals
+// once a temporarily-unreachable router comes back, without needing a
+// human to join the SoftAP and re-enter credentials that already work).
 void wifiProvisioningLoop();
 
 // POST /api/wifi handler body: accepts {ssid, password}, always responds

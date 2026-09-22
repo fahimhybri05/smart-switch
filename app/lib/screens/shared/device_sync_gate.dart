@@ -8,7 +8,7 @@ import 'error_view.dart';
 import 'skeleton_loader.dart';
 
 /// Shared "no devices" gate for every device-consuming screen (Home,
-/// Switches, Zones, Groups, Scenes, Schedules, Automations) — replaces each
+/// Switches, Zones, Groups, Schedules, Automations) — replaces each
 /// screen's old bare `if (devices.isEmpty) return EmptyDevicesView();`,
 /// which couldn't tell "cloud sync still in flight," "cloud sync failed,"
 /// and "account genuinely has zero devices" apart (see

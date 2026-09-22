@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 
 import {
@@ -12,6 +13,17 @@ import { pool } from '../db/pool.js';
 
 export const authRouter = Router();
 
+// Self-hosted product, not a huge public SaaS — 10 requests per IP per 15
+// minutes is a reasonable starting throttle against credential stuffing /
+// brute force on the two credential-checking endpoints. `/refresh` and
+// `/logout` don't take a password guess, so they're left unlimited.
+const credentialsLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 const credentialsSchema = z.object({
   email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8).max(128),
@@ -23,7 +35,7 @@ async function issueTokenPair(userId, res, status = 200) {
   res.status(status).json({ accessToken, refreshToken });
 }
 
-authRouter.post('/signup', async (req, res) => {
+authRouter.post('/signup', credentialsLimiter, async (req, res) => {
   const parsed = credentialsSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues[0].message });
@@ -64,7 +76,7 @@ authRouter.post('/signup', async (req, res) => {
   }
 });
 
-authRouter.post('/login', async (req, res) => {
+authRouter.post('/login', credentialsLimiter, async (req, res) => {
   const parsed = credentialsSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues[0].message });

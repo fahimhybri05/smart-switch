@@ -1,6 +1,7 @@
 #include "schedule_exec.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <string.h>
 #include <time.h>
 
@@ -9,7 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "cloud_client.h"
+#include "channel_control.h"
 #include "ds3231.h"
 #include "relay_hal.h"
 
@@ -112,9 +113,47 @@ static esp_err_t get_now(time_t *out_epoch, struct tm *out_tm)
 static void fire(const ss_schedule_t *sched)
 {
     bool on = (strcmp(sched->action, "ON") == 0);
-    relay_hal_set_state(sched->channel_idx, on);
-    cloud_client_notify_state_changed(sched->channel_idx, on);
+    channel_control_set_state(sched->channel_idx, on);
     ESP_LOGI(TAG, "fired schedule %s: channel %d -> %s", sched->id, sched->channel_idx, sched->action);
+}
+
+// Standard "Sunrise/Sunset Algorithm" (Almanac for Computers, 1990) — the
+// same well-known formula used by most embedded sunrise libraries; accurate
+// to ~+-1-2 minutes, sufficient for a relay timer. Returns local
+// minutes-since-midnight (0..1439) for the given local calendar date's
+// sunrise or sunset, or -1 if the sun doesn't rise/set that day at this
+// latitude (polar day/night). local_tm: local wall-clock date (as already
+// computed in scheduler_tick via gmtime_r(local_epoch)) — tm_yday supplies
+// the day-of-year N.
+static int compute_local_solar_minutes(const struct tm *local_tm, double lat, double lon,
+                                        int16_t utc_offset_min, bool is_sunrise)
+{
+    double N = local_tm->tm_yday + 1;
+    double lngHour = lon / 15.0;
+    double t = is_sunrise ? (N + ((6.0 - lngHour) / 24.0)) : (N + ((18.0 - lngHour) / 24.0));
+    double M = (0.9856 * t) - 3.289;
+    double L = M + (1.916 * sin(M * M_PI / 180.0)) + (0.020 * sin(2 * M * M_PI / 180.0)) + 282.634;
+    L = fmod(L, 360.0); if (L < 0) L += 360.0;
+    double RA = atan(0.91764 * tan(L * M_PI / 180.0)) * 180.0 / M_PI;
+    RA = fmod(RA, 360.0); if (RA < 0) RA += 360.0;
+    double Lquadrant = floor(L / 90.0) * 90.0;
+    double RAquadrant = floor(RA / 90.0) * 90.0;
+    RA = (RA + (Lquadrant - RAquadrant)) / 15.0;
+    double sinDec = 0.39782 * sin(L * M_PI / 180.0);
+    double cosDec = cos(asin(sinDec));
+    double cosH = (cos(90.833 * M_PI / 180.0) - (sinDec * sin(lat * M_PI / 180.0)))
+                  / (cosDec * cos(lat * M_PI / 180.0));
+    if (cosH > 1.0 || cosH < -1.0) {
+        return -1; // never rises / never sets that day at this latitude
+    }
+    double H = is_sunrise ? (360.0 - acos(cosH) * 180.0 / M_PI) : (acos(cosH) * 180.0 / M_PI);
+    H = H / 15.0;
+    double T = H + RA - (0.06571 * t) - 6.622;
+    double UT = fmod(T - lngHour, 24.0);
+    if (UT < 0) UT += 24.0;
+    double local_minutes = fmod(UT * 60.0 + utc_offset_min, 1440.0);
+    if (local_minutes < 0) local_minutes += 1440.0;
+    return (int)(local_minutes + 0.5); // round to nearest minute
 }
 
 static void self_disable(const ss_schedule_t *sched)
@@ -147,12 +186,24 @@ static void scheduler_tick(void)
     gmtime_r(&local_epoch, &local_tm);
     int iso_wday = (local_tm.tm_wday == 0) ? 7 : local_tm.tm_wday;
 
-    ss_schedule_t scheds[SS_MAX_SCHEDULES];
-    uint8_t count = 0;
-    config_store_get_schedules(scheds, SS_MAX_SCHEDULES, &count);
+    static int s_solar_cache_year = -1, s_solar_cache_yday = -1;
+    static int s_sunrise_min = -1, s_sunset_min = -1;
+    if (cfg.location_set && (local_tm.tm_year != s_solar_cache_year || local_tm.tm_yday != s_solar_cache_yday)) {
+        s_solar_cache_year = local_tm.tm_year;
+        s_solar_cache_yday = local_tm.tm_yday;
+        s_sunrise_min = compute_local_solar_minutes(&local_tm, cfg.latitude, cfg.longitude, cfg.utc_offset_min, true);
+        s_sunset_min  = compute_local_solar_minutes(&local_tm, cfg.latitude, cfg.longitude, cfg.utc_offset_min, false);
+    }
 
-    for (uint8_t i = 0; i < count; i++) {
-        ss_schedule_t *s = &scheds[i];
+    // cfg (already fetched above via config_store_get()) embeds
+    // schedules[]/schedule_count directly — reuse it instead of a second,
+    // independent config_store_get_schedules() call. That second call was a
+    // redundant mutex acquisition, and it opened a window where an
+    // HTTP-triggered edit landing between the two calls could pair a stale
+    // config with fresh schedules (or vice versa); reading both from the one
+    // snapshot closes that gap.
+    for (uint8_t i = 0; i < cfg.schedule_count; i++) {
+        ss_schedule_t *s = &cfg.schedules[i];
         if (!s->enabled) {
             continue;
         }
@@ -165,9 +216,21 @@ static void scheduler_tick(void)
             continue;
         }
 
-        // Clock types: once / daily / weekly
+        // Clock types (once/daily/weekly) match against their configured
+        // "HH:MM"; solar types (sunrise/sunset) match against the day-cached
+        // computed event time, shifted by solar_offset_min. Both funnel into
+        // the same h/m match + fire-guard + fire logic below.
+        bool is_solar = strcmp(s->type, "sunrise") == 0 || strcmp(s->type, "sunset") == 0;
         int h, m;
-        if (!parse_hhmm(s->time, &h, &m)) {
+        if (is_solar) {
+            int event_min = (strcmp(s->type, "sunrise") == 0) ? s_sunrise_min : s_sunset_min;
+            if (event_min < 0) {
+                continue; // location not configured, or polar day/night edge case
+            }
+            int target = ((event_min + s->solar_offset_min) % 1440 + 1440) % 1440;
+            h = target / 60;
+            m = target % 60;
+        } else if (!parse_hhmm(s->time, &h, &m)) {
             continue;
         }
         // A window, not an exact tmv.tm_sec == 0 match: the scheduler tick
@@ -263,17 +326,20 @@ esp_err_t schedule_exec_upsert(const ss_schedule_t *in, ss_schedule_t *out)
         return ESP_ERR_INVALID_ARG;
     }
 
-    bool is_clock = strcmp(in->type, "once") == 0 || strcmp(in->type, "daily") == 0 || strcmp(in->type, "weekly") == 0;
+    bool is_wallclock = strcmp(in->type, "once") == 0 || strcmp(in->type, "daily") == 0 || strcmp(in->type, "weekly") == 0;
+    bool is_solar = strcmp(in->type, "sunrise") == 0 || strcmp(in->type, "sunset") == 0;
     bool is_countdown = strcmp(in->type, "countdown") == 0;
-    if (!is_clock && !is_countdown) {
+    if (!is_wallclock && !is_solar && !is_countdown) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (is_clock) {
+    if (is_wallclock) {
         int h, m;
         if (!parse_hhmm(in->time, &h, &m)) {
             return ESP_ERR_INVALID_ARG;
         }
     }
+    // is_solar requires no `time` field — solar_offset_min is optional
+    // (defaults to 0) and structurally always valid (int16_t).
     if (is_countdown && in->duration_s == 0) {
         return ESP_ERR_INVALID_ARG;
     }

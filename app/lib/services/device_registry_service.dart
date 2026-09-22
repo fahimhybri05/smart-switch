@@ -12,6 +12,19 @@ class DeviceRegistryService {
     _box = await Hive.openBox(_boxName);
   }
 
+  /// Closes the underlying box — used by headless-isolate callers
+  /// (background_monitor_service.dart) that only need this service for one
+  /// short-lived pass, to shrink the window where that isolate and the main
+  /// app isolate could both have this same Hive box open at once (see that
+  /// file's doc comment for the full unsafe-multi-isolate-access context).
+  /// Not called by the long-lived main-isolate instance behind
+  /// `deviceRegistryServiceProvider`, which intentionally keeps its box
+  /// open for the app's whole lifetime.
+  Future<void> close() async {
+    await _box?.close();
+    _box = null;
+  }
+
   Box get _requireBox {
     final box = _box;
     if (box == null) {

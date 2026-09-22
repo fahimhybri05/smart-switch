@@ -21,6 +21,8 @@ class _FakeAppSettingsService implements AppSettingsService {
   String? getBackendUrl() => null;
   @override
   Future<void> setBackendUrl(String url) async {}
+  @override
+  Future<void> close() async {}
 }
 
 class _FakeAuthSessionService implements AuthSessionService {

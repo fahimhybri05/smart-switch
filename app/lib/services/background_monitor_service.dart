@@ -68,23 +68,44 @@ void backgroundMonitorCallbackDispatcher() {
   });
 }
 
+/// This whole pass runs in a headless Flutter engine WorkManager spins up
+/// separately from (and potentially concurrently with) the main app
+/// isolate — both independently open the SAME Hive boxes (`known_devices`,
+/// `last_states`, `app_settings`, and transitively `auth_session` via
+/// widget_service.dart's cloud fallback), which Hive CE's own source
+/// explicitly documents as unsafe (`HiveWarning.unsafeIsolate`: each
+/// isolate keeps its own box cache, and independent access can corrupt
+/// state). A full fix would route every headless-isolate storage access
+/// through a platform channel back to the main isolate — real, but out of
+/// scope for this pass. Mitigation applied here instead: open each box,
+/// do its one read/write, close it again immediately (rather than holding
+/// it open for this whole function's lifetime) — this shrinks, but does
+/// not eliminate, the window where this isolate and the main app isolate
+/// could have the same box open at once.
 Future<void> _runMonitorPass() async {
   await Hive.initFlutter();
   final registry = DeviceRegistryService();
   await registry.init();
-  final lastStatesBox = await Hive.openBox(_lastStatesBoxName);
+  final devices = await registry.getAll();
+  await registry.close();
+
   final settings = AppSettingsService();
   await settings.init();
   final backendUrl = settings.getBackendUrl();
+  await settings.close();
 
   const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
   await _notifications.initialize(
     settings: const InitializationSettings(android: androidSettings),
   );
 
-  final devices = await registry.getAll();
-  for (final device in devices) {
-    await _checkDevice(device, lastStatesBox, backendUrl);
+  final lastStatesBox = await Hive.openBox(_lastStatesBoxName);
+  try {
+    for (final device in devices) {
+      await _checkDevice(device, lastStatesBox, backendUrl);
+    }
+  } finally {
+    await lastStatesBox.close();
   }
 
   await refreshWidgetStorage();

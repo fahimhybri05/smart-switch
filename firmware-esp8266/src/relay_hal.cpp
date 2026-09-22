@@ -6,8 +6,17 @@ static bool s_state[SS_CHANNEL_COUNT] = {false};
 
 void relayHalInit() {
   for (uint8_t i = 0; i < SS_CHANNEL_COUNT; i++) {
+    // Write the "off" level to the output register BEFORE switching the pin
+    // to OUTPUT mode, not after — digitalWrite() sets the register
+    // regardless of current pin mode, so the pin drives "off" from the
+    // instant it becomes an output, with no intermediate glitch window at
+    // the direction switch itself (the previous off-level-after-pinMode
+    // order left the pin's output level briefly undefined/whatever the
+    // register defaulted to during that switch).
+    int offLevel = SS_RELAY_ACTIVE_LOW ? HIGH : LOW;
+    digitalWrite(SS_RELAY_GPIO[i], offLevel);
     pinMode(SS_RELAY_GPIO[i], OUTPUT);
-    relayHalSetState(i, false);
+    s_state[i] = false;
   }
 }
 

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/device/channel_state.dart';
 import '../../models/local/automation.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
+import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
 import '../shared/device_sync_gate.dart';
 import '../shared/empty_state_view.dart';
@@ -39,53 +41,6 @@ String _describeTrigger(Automation automation, List<KnownDevice> devices) {
 class AutomationsScreen extends ConsumerWidget {
   const AutomationsScreen({super.key});
 
-  Future<void> _delete(
-    BuildContext context,
-    WidgetRef ref,
-    Automation automation,
-  ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete automation?'),
-        content: Text('Delete "${automation.name}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    try {
-      await ref.read(automationsProvider.notifier).remove(automation.id);
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
-      }
-    }
-  }
-
-  Future<void> _toggleEnabled(WidgetRef ref, Automation automation) async {
-    await ref
-        .read(automationsProvider.notifier)
-        .save(
-          id: automation.id,
-          householdId: automation.householdId,
-          name: automation.name,
-          enabled: !automation.enabled,
-          trigger: automation.trigger,
-          actions: automation.actions,
-        );
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final devices = ref.watch(knownDevicesProvider);
@@ -111,49 +66,12 @@ class AutomationsScreen extends ConsumerWidget {
             : ListView(
                 padding: const EdgeInsets.all(Spacing.md),
                 children: [
-                  for (final automation in automations)
-                    Card(
-                      child: ListTile(
-                        leading: Icon(
-                          automation.trigger is ScheduleTrigger
-                              ? Icons.schedule_outlined
-                              : Icons.bolt_outlined,
-                        ),
-                        title: Text(automation.name),
-                        subtitle: Text(_describeTrigger(automation, devices)),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Switch(
-                              value: automation.enabled,
-                              onChanged: isOwnerSomewhere
-                                  ? (_) => _toggleEnabled(ref, automation)
-                                  : null,
-                            ),
-                            if (isOwnerSomewhere)
-                              PopupMenuButton<String>(
-                                onSelected: (value) {
-                                  if (value == 'edit') {
-                                    showModalBottomSheet<void>(
-                                      context: context,
-                                      isScrollControlled: true,
-                                      builder: (_) => _AutomationEditor(
-                                        devices: devices,
-                                        existing: automation,
-                                      ),
-                                    );
-                                  } else if (value == 'delete') {
-                                    _delete(context, ref, automation);
-                                  }
-                                },
-                                itemBuilder: (_) => const [
-                                  PopupMenuItem(value: 'edit', child: Text('Edit')),
-                                  PopupMenuItem(value: 'delete', child: Text('Delete')),
-                                ],
-                              ),
-                          ],
-                        ),
-                      ),
+                  for (final (index, automation) in automations.indexed)
+                    _AutomationTile(
+                      automation: automation,
+                      devices: devices,
+                      isOwnerSomewhere: isOwnerSomewhere,
+                      index: index,
                     ),
                 ],
               ),
@@ -170,6 +88,213 @@ class AutomationsScreen extends ConsumerWidget {
             )
           : null,
     );
+  }
+}
+
+/// A single automation row. Stateful (rather than the plain [ConsumerWidget]
+/// row this used to be) so a delete can play a local fade/collapse-out
+/// before the item actually drops out of [automationsProvider]'s list —
+/// otherwise it just vanishes the instant the provider state updates.
+class _AutomationTile extends ConsumerStatefulWidget {
+  const _AutomationTile({
+    required this.automation,
+    required this.devices,
+    required this.isOwnerSomewhere,
+    required this.index,
+  });
+
+  final Automation automation;
+  final List<KnownDevice> devices;
+  final bool isOwnerSomewhere;
+  final int index;
+
+  @override
+  ConsumerState<_AutomationTile> createState() => _AutomationTileState();
+}
+
+class _AutomationTileState extends ConsumerState<_AutomationTile> {
+  bool _removing = false;
+
+  Future<void> _delete() async {
+    final automation = widget.automation;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete automation?'),
+        content: Text('Delete "${automation.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    // Play the exit animation first — fade + collapse this tile to nothing
+    // — then apply the real removal. By the time automationsProvider's list
+    // updates the tile is already invisible/zero-height, so there's no
+    // instant snap when it drops out of the ListView.
+    setState(() => _removing = true);
+    await Future.delayed(Motion.medium);
+    if (!mounted) return;
+    try {
+      await ref.read(automationsProvider.notifier).remove(automation.id);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _removing = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
+    }
+  }
+
+  Future<void> _toggleEnabled() async {
+    final automation = widget.automation;
+    try {
+      await ref
+          .read(automationsProvider.notifier)
+          .save(
+            id: automation.id,
+            householdId: automation.householdId,
+            name: automation.name,
+            enabled: !automation.enabled,
+            trigger: automation.trigger,
+            actions: automation.actions,
+          );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final automation = widget.automation;
+    final devices = widget.devices;
+    final isOwnerSomewhere = widget.isOwnerSomewhere;
+
+    return AnimatedSize(
+          duration: Motion.medium,
+          curve: Motion.standard,
+          alignment: Alignment.topCenter,
+          child: AnimatedOpacity(
+            duration: Motion.medium,
+            curve: Motion.standard,
+            opacity: _removing ? 0 : 1,
+            child: _removing
+                ? const SizedBox(width: double.infinity)
+                : Card(
+                    child: ListTile(
+                      leading: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          automation.trigger is ScheduleTrigger
+                              ? Icons.schedule_outlined
+                              : Icons.bolt_outlined,
+                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                          size: 20,
+                        ),
+                      ),
+                      title: Text(automation.name),
+                      subtitle: Text(_describeTrigger(automation, devices)),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Switch(
+                            value: automation.enabled,
+                            onChanged: isOwnerSomewhere
+                                ? (_) => _toggleEnabled()
+                                : null,
+                          ),
+                          if (isOwnerSomewhere) ...[
+                            const SizedBox(width: Spacing.xs),
+                            PopupMenuButton<String>(
+                              onSelected: (value) {
+                                if (value == 'edit') {
+                                  showModalBottomSheet<void>(
+                                    context: context,
+                                    isScrollControlled: true,
+                                    builder: (_) => _AutomationEditor(
+                                      devices: devices,
+                                      existing: automation,
+                                    ),
+                                  );
+                                } else if (value == 'delete') {
+                                  _delete();
+                                }
+                              },
+                              itemBuilder: (menuContext) => [
+                                const PopupMenuItem(
+                                  value: 'edit',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.edit_outlined, size: 18),
+                                      SizedBox(width: Spacing.sm),
+                                      Text('Edit'),
+                                    ],
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: 'delete',
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.delete_outline,
+                                        size: 18,
+                                        color: Theme.of(
+                                          menuContext,
+                                        ).colorScheme.error,
+                                      ),
+                                      const SizedBox(width: Spacing.sm),
+                                      Text(
+                                        'Delete',
+                                        style: TextStyle(
+                                          color: Theme.of(
+                                            menuContext,
+                                          ).colorScheme.error,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+          ),
+        )
+        .animate(delay: Motion.fast * widget.index)
+        .fadeIn(duration: Motion.medium, curve: Motion.standard)
+        .slideY(
+          begin: 0.08,
+          end: 0,
+          duration: Motion.medium,
+          curve: Motion.standard,
+        );
   }
 }
 
@@ -230,8 +355,19 @@ class _AutomationEditorState extends ConsumerState<_AutomationEditor> {
 
   Future<void> _save() async {
     final name = _nameController.text.trim();
-    if (name.isEmpty || _selectedActions.isEmpty) return;
-    if (!_isSchedule && (_triggerDeviceId == null || _triggerChannelIdx == null)) {
+    final missing = <String>[];
+    if (name.isEmpty) missing.add('a name');
+    if (!_isSchedule &&
+        (_triggerDeviceId == null || _triggerChannelIdx == null)) {
+      missing.add('a trigger device');
+    }
+    if (_selectedActions.isEmpty) missing.add('at least one action switch');
+    if (missing.isNotEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Missing: ${missing.join(', ')}')),
+        );
+      }
       return;
     }
 
@@ -309,7 +445,13 @@ class _AutomationEditorState extends ConsumerState<_AutomationEditor> {
               decoration: const InputDecoration(labelText: 'Name'),
             ),
             const SizedBox(height: Spacing.md),
-            Text('Trigger', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Trigger',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const SizedBox(height: Spacing.sm),
             SegmentedButton<bool>(
               segments: const [
@@ -382,7 +524,13 @@ class _AutomationEditorState extends ConsumerState<_AutomationEditor> {
               ),
             ],
             const SizedBox(height: Spacing.md),
-            Text('Then', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              'Then',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const SizedBox(height: Spacing.sm),
             SegmentedButton<ChannelPowerState>(
               segments: const [
@@ -444,9 +592,15 @@ class _TriggerDevicePicker extends ConsumerWidget {
                 data: (value) => Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      device.friendlyName,
-                      style: Theme.of(context).textTheme.labelLarge,
+                    Padding(
+                      padding: const EdgeInsets.only(top: Spacing.xs),
+                      child: Text(
+                        device.friendlyName,
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                     for (final sw in value.switches)
                       RadioListTile<String>(
@@ -490,9 +644,15 @@ class _ActionDeviceChoices extends ConsumerWidget {
       data: (value) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            device.friendlyName,
-            style: Theme.of(context).textTheme.labelLarge,
+          Padding(
+            padding: const EdgeInsets.only(top: Spacing.xs),
+            child: Text(
+              device.friendlyName,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
           for (final sw in value.switches)
             CheckboxListTile(

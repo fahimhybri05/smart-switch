@@ -8,6 +8,7 @@ import '../../providers/service_providers.dart';
 import '../../services/discovery_service.dart';
 import '../../services/provisioning/softap_provisioning_client.dart';
 import '../../theme/spacing.dart';
+import '../shared/friendly_error.dart';
 
 /// Provisioning wizard:
 ///   1. First claim: the phone joins the device's SoftAP network manually
@@ -106,9 +107,23 @@ class _ProvisioningWizardScreenState
         unawaited(_scan());
       }
     } on ProvisioningException catch (e) {
-      if (mounted) setState(() => _provisioningStatusText = 'Failed: $e');
+      if (mounted) {
+        setState(
+          () => _provisioningStatusText = friendlyErrorMessage(
+            e,
+            'Provisioning',
+          ),
+        );
+      }
     } catch (e) {
-      if (mounted) setState(() => _provisioningStatusText = 'Failed: $e');
+      if (mounted) {
+        setState(
+          () => _provisioningStatusText = friendlyErrorMessage(
+            e,
+            'Provisioning',
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _provisioning = false);
     }
@@ -190,7 +205,9 @@ class _ProvisioningWizardScreenState
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _reconfigStatusText = 'Failed to start reconfig: $e');
+        setState(
+          () => _reconfigStatusText = friendlyErrorMessage(e, 'Reconfigure'),
+        );
       }
     } finally {
       if (mounted) setState(() => _reconfiguring = false);
@@ -279,20 +296,35 @@ class _ProvisioningWizardScreenState
               for (final device in _found)
                 Padding(
                   padding: const EdgeInsets.only(top: Spacing.sm),
-                  child: ListTile(
-                    tileColor: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainerHighest,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    leading: const Icon(Icons.developer_board),
-                    title: Text(device.deviceId),
-                    subtitle: Text('${device.host}:${device.port}'),
-                    trailing: FilledButton.tonal(
-                      onPressed: () => _claim(device),
-                      child: const Text('Add'),
-                    ),
+                  child: Builder(
+                    builder: (context) {
+                      final colorScheme = Theme.of(context).colorScheme;
+                      return ListTile(
+                        tileColor: colorScheme.surfaceContainerHigh,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        leading: Container(
+                          width: 40,
+                          height: 40,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: colorScheme.secondaryContainer,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.developer_board_rounded,
+                            color: colorScheme.onSecondaryContainer,
+                          ),
+                        ),
+                        title: Text(device.deviceId),
+                        subtitle: Text('${device.host}:${device.port}'),
+                        trailing: FilledButton.tonal(
+                          onPressed: () => _claim(device),
+                          child: const Text('Add'),
+                        ),
+                      );
+                    },
                   ),
                 ),
               if (!_scanning && _found.isEmpty)
@@ -300,8 +332,7 @@ class _ProvisioningWizardScreenState
                   padding: const EdgeInsets.only(top: Spacing.sm),
                   child: Text(
                     'No devices found yet.',
-                    style: TextStyle(
-                      fontStyle: FontStyle.italic,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
@@ -368,7 +399,7 @@ class _ProvisioningWizardScreenState
           ),
           _WizardSection(
             number: 3,
-            icon: Icons.help_outline,
+            icon: Icons.restart_alt_rounded,
             title: 'Device unreachable?',
             children: const [
               Text(
@@ -416,11 +447,12 @@ class _WizardSection extends StatelessWidget {
                     style: TextStyle(
                       color: colorScheme.onPrimaryContainer,
                       fontSize: 13,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
                 const SizedBox(width: Spacing.sm),
-                Icon(icon, size: 20, color: colorScheme.onSurfaceVariant),
+                Icon(icon, size: 20, color: colorScheme.primary),
                 const SizedBox(width: Spacing.xs),
                 Expanded(
                   child: Text(

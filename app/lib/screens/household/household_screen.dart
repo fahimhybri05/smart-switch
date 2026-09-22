@@ -4,6 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/local/household.dart';
 import '../../providers/service_providers.dart';
 import '../../theme/spacing.dart';
+import '../shared/empty_state_view.dart';
+
+final _emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
 
 /// Lists every household the logged-in user belongs to — their own
 /// "owner" household (auto-created at signup) plus any they've accepted an
@@ -19,17 +22,31 @@ class HouseholdScreen extends ConsumerWidget {
     Household household,
   ) async {
     final controller = TextEditingController();
+    final formKey = GlobalKey<FormState>();
     final email = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Invite to household'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: TextInputType.emailAddress,
-          decoration: const InputDecoration(
-            labelText: 'Email',
-            hintText: 'They must already have a Smart Switch account',
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(
+              labelText: 'Email',
+              hintText: 'They must already have a Smart Switch account',
+            ),
+            validator: (value) {
+              final text = (value ?? '').trim();
+              if (text.isEmpty) {
+                return 'Enter an email address';
+              }
+              if (!_emailRegex.hasMatch(text)) {
+                return 'Enter a valid email address';
+              }
+              return null;
+            },
           ),
         ),
         actions: [
@@ -38,7 +55,12 @@ class HouseholdScreen extends ConsumerWidget {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            onPressed: () {
+              if (!(formKey.currentState?.validate() ?? false)) {
+                return;
+              }
+              Navigator.of(context).pop(controller.text.trim());
+            },
             child: const Text('Invite'),
           ),
         ],
@@ -46,9 +68,7 @@ class HouseholdScreen extends ConsumerWidget {
     );
     if (email == null || email.isEmpty || !context.mounted) return;
     try {
-      await ref
-          .read(householdsProvider.notifier)
-          .invite(household.id, email);
+      await ref.read(householdsProvider.notifier).invite(household.id, email);
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
@@ -99,6 +119,10 @@ class HouseholdScreen extends ConsumerWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        icon: Icon(
+          Icons.warning_amber_rounded,
+          color: Theme.of(context).colorScheme.error,
+        ),
         title: const Text('Remove member?'),
         content: Text(
           '${member.email} will lose access to every device in "${household.name}".',
@@ -109,6 +133,10 @@ class HouseholdScreen extends ConsumerWidget {
             child: const Text('Cancel'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('Remove'),
           ),
@@ -141,9 +169,11 @@ class HouseholdScreen extends ConsumerWidget {
         child: households.isEmpty
             ? ListView(
                 children: const [
-                  Padding(
-                    padding: EdgeInsets.all(Spacing.lg),
-                    child: Text('No households yet.'),
+                  EmptyStateView(
+                    icon: Icons.family_restroom_outlined,
+                    title: 'No households yet',
+                    subtitle:
+                        'A household is created automatically when you sign up — pull to refresh if you expect one here.',
                   ),
                 ],
               )
@@ -160,6 +190,23 @@ class HouseholdScreen extends ConsumerWidget {
                           children: [
                             Row(
                               children: [
+                                Container(
+                                  width: 34,
+                                  height: 34,
+                                  alignment: Alignment.center,
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.primary.withValues(
+                                      alpha: 0.12,
+                                    ),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(
+                                    Icons.house_outlined,
+                                    size: 18,
+                                    color: colorScheme.primary,
+                                  ),
+                                ),
+                                const SizedBox(width: Spacing.sm),
                                 Expanded(
                                   child: InkWell(
                                     onTap: household.isOwner
@@ -177,17 +224,40 @@ class HouseholdScreen extends ConsumerWidget {
                                   IconButton(
                                     icon: const Icon(Icons.person_add_outlined),
                                     tooltip: 'Invite',
+                                    color: colorScheme.primary,
                                     onPressed: () =>
                                         _invite(context, ref, household),
                                   ),
                               ],
                             ),
-                            Text(
-                              household.isOwner ? 'You own this household' : 'Member',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: colorScheme.outline),
+                            const SizedBox(height: Spacing.xs),
+                            Container(
+                              margin: const EdgeInsetsDirectional.only(
+                                start: 44,
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: Spacing.sm,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: colorScheme.surfaceContainerHigh,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                household.isOwner ? 'Owner' : 'Member',
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
+                                      color: colorScheme.onSurfaceVariant,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                              ),
                             ),
                             const SizedBox(height: Spacing.sm),
+                            Divider(
+                              height: 1,
+                              color: colorScheme.outlineVariant,
+                            ),
+                            const SizedBox(height: Spacing.xs),
                             for (final member in household.members)
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
@@ -199,16 +269,25 @@ class HouseholdScreen extends ConsumerWidget {
                                         : '?',
                                     style: TextStyle(
                                       color: colorScheme.onPrimaryContainer,
+                                      fontWeight: FontWeight.w700,
                                     ),
                                   ),
                                 ),
                                 title: Text(member.email),
-                                subtitle: Text(member.role),
+                                subtitle: Text(
+                                  member.role,
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: colorScheme.onSurfaceVariant,
+                                      ),
+                                ),
                                 trailing: household.isOwner
                                     ? IconButton(
-                                        icon: const Icon(
+                                        icon: Icon(
                                           Icons.person_remove_outlined,
+                                          color: colorScheme.error,
                                         ),
+                                        tooltip: 'Remove member',
                                         onPressed: () => _removeMember(
                                           context,
                                           ref,

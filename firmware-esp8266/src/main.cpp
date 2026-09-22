@@ -1,9 +1,11 @@
 #include <Arduino.h>
 #include <ESP8266mDNS.h>
 
+#include "channel_control.h"
 #include "cloud_client.h"
 #include "config_store.h"
 #include "http_api.h"
+#include "physical_input.h"
 #include "recovery_button.h"
 #include "relay_hal.h"
 #include "schedule_exec.h"
@@ -50,6 +52,8 @@ void setup() {
   configStore.begin();
   relayHalInit();
   applyBootStates();
+  channelControlInit();
+  physicalInputInit();
 
   // Printed once per boot so a fresh board's QR sticker can be generated
   // right after flashing — the app's QR wizard reads &chip= to pick the
@@ -78,7 +82,10 @@ void loop() {
     MDNS.update();
   }
   httpApiLoop();
+  configStore.loop();
   scheduleExecLoop();
+  channelControlLoop();
+  physicalInputLoop();
   cloudClientLoop();
   recoveryButtonLoop();
 }

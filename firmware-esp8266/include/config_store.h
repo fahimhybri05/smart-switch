@@ -14,24 +14,27 @@ struct SsSwitch {
   char zone[32] = {0};
   char type[8] = "ON_OFF"; // this board never sets anything else
   char default_boot_state[8] = "OFF";
+  char inputMode[10] = "DISABLED";  // "DISABLED" | "TOGGLE" | "EDGE"
+  uint32_t inchingMs = 0;  // 0 = disabled; ms before an ON channel auto-reverses to OFF
 };
 
 struct SsSchedule {
   char id[12] = {0};
   uint8_t channel_idx = 0;
   char action[4] = {0};
-  char type[10] = {0};
+  char type[10] = {0}; // "once" | "daily" | "weekly" | "countdown" | "sunrise" | "sunset"
   char time[6] = {0};
   uint8_t days_mask = 0;
   uint32_t duration_s = 0;
   int64_t countdown_started_at = 0; // internal-only, not part of the wire schema
   bool enabled = true;
+  int16_t solarOffsetMin = 0;  // minutes to shift computed sunrise/sunset; negative=before, positive=after; sunrise/sunset only
 };
 
 struct SsConfig {
   char device_id[16] = {0};
   char name[32] = {0};
-  char board_type[16] = "ESP8266_7CH";
+  char board_type[16] = "ESP8266_6CH";
   uint8_t channel_count = SS_CHANNEL_COUNT;
   char channel_driver[16] = "GPIO_DIRECT";
   char fw_version[32] = "1.0.0";
@@ -50,6 +53,11 @@ struct SsConfig {
   char staticGateway[16] = {0};
   char staticSubnet[16] = {0};
   char staticDns[16] = {0}; // empty = fall back to staticGateway as DNS
+
+  bool interlockEnabled = false;  // true: turning any channel ON forces every other channel OFF
+  double latitude = 0.0;
+  double longitude = 0.0;  // degrees, east-positive
+  bool locationSet = false;  // false until latitude/longitude explicitly configured — gates sunrise/sunset schedules
 };
 
 // LittleFS-backed, single JSON file (/config.json), same atomic
@@ -63,6 +71,13 @@ class ConfigStore {
   SsConfig &cfg() { return _cfg; }
   void save();
 
+  // Call once per loop() iteration. Flushes a pending debounced save() to
+  // flash once _dirty has been stable for >=500ms — see the mutators below,
+  // which set the dirty flag instead of writing to flash synchronously on
+  // every call (same "debounce, don't write on every toggle" principle as
+  // channel-state persistence elsewhere in this project's architecture).
+  void loop();
+
   void upsertSwitch(const SsSwitch &sw);
   void deleteSwitch(uint8_t channel_idx);
 
@@ -74,6 +89,9 @@ class ConfigStore {
   void setAuthHash(const uint8_t hash[32]);
   void setUtcOffset(int16_t offset);
 
+  void setInterlockEnabled(bool enabled);
+  void setLocation(double latitude, double longitude); // also sets locationSet = true
+
   // Pass enabled=false to revert to DHCP (ip/gateway/subnet/dns ignored).
   // Applied at next connect — see wifiProvisioningBegin(). dns may be ""
   // to fall back to gateway.
@@ -82,6 +100,8 @@ class ConfigStore {
 
  private:
   SsConfig _cfg;
+  bool _dirty = false;
+  uint32_t _dirtySinceMs = 0;
   void loadDefault();
   bool loadFromDisk();
 };

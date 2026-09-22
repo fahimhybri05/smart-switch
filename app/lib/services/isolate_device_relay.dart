@@ -23,7 +23,19 @@ Future<T?> viaLocalOrCloud<T>({
     try {
       return await call(DeviceApiClient(baseUrl: 'http://$lastKnownIp'));
     } catch (_) {
-      // Fall through to the cloud relay below.
+      // Fall through to the cloud relay below. Same root cause as
+      // device_transport.dart's FallbackDeviceTransport had (Fix 6): the
+      // plain `DeviceApiClient(baseUrl: ...)` constructed above uses
+      // LocalHttpTransport's own `.timeout()`, which stops *waiting* for
+      // the request without cancelling it, so a local timeout here can
+      // still race a cloud retry against an in-flight local call.
+      // Intentionally left as-is (no `allowFallbackAfterTimeout`-style
+      // opt-out here) — every caller of this function (widget tap-to-
+      // toggle, background monitor) only ever does idempotent
+      // channel-state-set calls, not schedule creation, so a possible
+      // duplicate local+cloud execution just means "set ON" happens
+      // twice, which is harmless (unlike Fix 6's schedule-creation case,
+      // where a duplicate is a genuinely new, visible resource).
     }
   }
   if (backendUrl == null) {

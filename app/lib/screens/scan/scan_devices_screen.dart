@@ -9,6 +9,7 @@ import '../../providers/service_providers.dart';
 import '../../services/discovery_service.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
+import '../shared/friendly_error.dart';
 
 /// Scans the LAN (mDNS, `_esp-switch._tcp`) for already-provisioned Smart
 /// Switch devices not yet known to this phone — a second, faster path
@@ -98,9 +99,9 @@ class _ScanDevicesScreenState extends ConsumerState<ScanDevicesScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _addingIds.remove(device.deviceId));
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to add: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e, 'Add'))),
+        );
       }
     }
   }
@@ -112,7 +113,11 @@ class _ScanDevicesScreenState extends ConsumerState<ScanDevicesScreen> {
         title: const Text('Scan for devices'),
         actions: [
           IconButton(
-            icon: Icon(_scanning ? Icons.stop_circle_outlined : Icons.refresh),
+            icon: Icon(
+              _scanning
+                  ? Icons.stop_circle_outlined
+                  : Icons.refresh_rounded,
+            ),
             tooltip: _scanning ? 'Stop scanning' : 'Scan again',
             onPressed: _scanning ? _stopScan : _startScan,
           ),
@@ -232,19 +237,25 @@ class _FoundDeviceCard extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: Spacing.sm),
       child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: colorScheme.primaryContainer,
+        leading: Container(
+          width: 40,
+          height: 40,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: colorScheme.secondaryContainer,
+            borderRadius: BorderRadius.circular(12),
+          ),
           child: Icon(
-            Icons.developer_board,
-            color: colorScheme.onPrimaryContainer,
+            Icons.developer_board_rounded,
+            color: colorScheme.onSecondaryContainer,
           ),
         ),
         title: Text(device.deviceId),
         subtitle: Text(device.host),
         trailing: added
             ? Icon(
-                Icons.check_circle,
-                color: colorScheme.primary,
+                Icons.check_circle_rounded,
+                color: colorScheme.tertiary,
               ).animate().scaleXY(
                 begin: 0,
                 end: 1,

@@ -2,6 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../theme/app_theme.dart';
+import '../../theme/motion.dart';
+
 /// Physical device states rendered by [DeviceVisualization].
 enum DeviceVisualState { off, on, connecting, pending, offline, error }
 
@@ -39,7 +42,9 @@ class _DeviceVisualizationState extends State<DeviceVisualization> {
     final isPending =
         widget.state == DeviceVisualState.pending ||
         widget.state == DeviceVisualState.connecting;
-    final accent = Theme.of(context).colorScheme.primary;
+    final colorScheme = Theme.of(context).colorScheme;
+    final accent = colorScheme.primary;
+    final panel = context.panelColors;
 
     return Semantics(
       button: widget.onTap != null,
@@ -59,11 +64,11 @@ class _DeviceVisualizationState extends State<DeviceVisualization> {
             : () => setState(() => _pressed = false),
         child: AnimatedScale(
           scale: _pressed ? 0.96 : 1,
-          duration: const Duration(milliseconds: 100),
+          duration: Motion.micro,
           curve: Curves.easeOut,
           child: TweenAnimationBuilder<double>(
             tween: Tween<double>(end: isActive ? 1 : 0),
-            duration: const Duration(milliseconds: 320),
+            duration: Motion.medium,
             curve: Curves.easeOutCubic,
             builder: (context, progress, child) {
               return CustomPaint(
@@ -74,6 +79,8 @@ class _DeviceVisualizationState extends State<DeviceVisualization> {
                   gangCount: widget.gangCount.clamp(1, 4),
                   accent: accent,
                   pressed: _pressed,
+                  wallColor: colorScheme.surfaceContainerHigh,
+                  panel: panel,
                 ),
                 child: child,
               );
@@ -159,6 +166,8 @@ class _DevicePainter extends CustomPainter {
     required this.gangCount,
     required this.accent,
     required this.pressed,
+    required this.wallColor,
+    required this.panel,
   });
 
   final DeviceVisualKind kind;
@@ -167,6 +176,8 @@ class _DevicePainter extends CustomPainter {
   final int gangCount;
   final Color accent;
   final bool pressed;
+  final Color wallColor;
+  final AppPanelColors panel;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -189,7 +200,7 @@ class _DevicePainter extends CustomPainter {
     );
     canvas.drawRRect(
       wall,
-      Paint()..color = const Color(0xFFF7F8F7),
+      Paint()..color = wallColor,
     );
 
     final shadowPaint = Paint()
@@ -209,7 +220,7 @@ class _DevicePainter extends CustomPainter {
     );
     canvas.drawRRect(
       underPlate,
-      Paint()..color = const Color(0xFFB0B6B6).withValues(alpha: 0.72 * opacity),
+      Paint()..color = panel.plateLo.withValues(alpha: 0.72 * opacity),
     );
 
     final surround = Paint()
@@ -217,8 +228,8 @@ class _DevicePainter extends CustomPainter {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          Color.lerp(const Color(0xFFFDFDFD), const Color(0xFFD8DEDF), 0.3)!,
-          const Color(0xFFD7DDDE),
+          Color.lerp(panel.plateHi, panel.plateLo, 0.3)!,
+          panel.plateLo,
         ],
       ).createShader(plate)
       ..style = PaintingStyle.fill;
@@ -229,7 +240,7 @@ class _DevicePainter extends CustomPainter {
     canvas.drawRRect(
       RRect.fromRectAndRadius(plate, const Radius.circular(13)),
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.9 * opacity)
+        ..color = panel.hi.withValues(alpha: panel.hi.a * opacity)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.2,
     );
@@ -285,21 +296,21 @@ class _DevicePainter extends CustomPainter {
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(frame, const Radius.circular(10)),
-      Paint()..color = const Color(0xFF9C9F9F).withValues(alpha: opacity),
+      Paint()..color = panel.plateLo.withValues(alpha: opacity),
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(frame.deflate(2), const Radius.circular(8)),
-      Paint()..color = const Color(0xFFFDFDFD),
+      Paint()..color = panel.plateHi,
     );
 
     // The two fasteners are part of the physical product, not decoration.
     final screwPaint = Paint()
-      ..color = const Color(0xFF8E9493).withValues(alpha: opacity)
+      ..color = panel.screw.withValues(alpha: opacity)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.9;
     for (final x in [plate.left + plate.width * 0.105, plate.right - plate.width * 0.105]) {
       final screwCenter = Offset(x, plate.center.dy);
-      canvas.drawCircle(screwCenter, 4.3, Paint()..color = const Color(0xFFE9ECEB));
+      canvas.drawCircle(screwCenter, 4.3, Paint()..color = Color.lerp(panel.screw, panel.plateHi, 0.45)!);
       canvas.drawCircle(screwCenter, 4.3, screwPaint);
       canvas.drawLine(
         screwCenter.translate(-1.8, 0),
@@ -331,7 +342,7 @@ class _DevicePainter extends CustomPainter {
           Offset(left, frame.top + 4),
           Offset(left, frame.bottom - 4),
           Paint()
-            ..color = const Color(0xFFB7BBBB).withValues(alpha: opacity)
+            ..color = panel.plateLo.withValues(alpha: opacity)
             ..strokeWidth = 1,
         );
       }
@@ -341,18 +352,14 @@ class _DevicePainter extends CustomPainter {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            const Color(0xFFFFFFFF),
-            Color.lerp(
-              const Color(0xFFF4F5F4),
-              const Color(0xFFDDE2E1),
-              progress,
-            )!,
+            panel.paddleHi,
+            Color.lerp(panel.paddle, panel.paddleLo, progress)!,
           ],
         ).createShader(rocker);
       final rockerShadow = rocker.shift(const Offset(0, 3));
       canvas.drawRRect(
         RRect.fromRectAndRadius(rockerShadow, const Radius.circular(6)),
-        Paint()..color = Colors.black.withValues(alpha: 0.18 * opacity),
+        Paint()..color = panel.sh.withValues(alpha: panel.sh.a * opacity),
       );
       canvas.drawRRect(
         RRect.fromRectAndRadius(rocker, const Radius.circular(6)),
@@ -361,7 +368,7 @@ class _DevicePainter extends CustomPainter {
       canvas.drawRRect(
         RRect.fromRectAndRadius(rocker, const Radius.circular(6)),
         Paint()
-          ..color = const Color(0xFF969C9B).withValues(alpha: opacity)
+          ..color = Color.lerp(panel.paddleLo, panel.screw, 0.4)!.withValues(alpha: opacity)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1.4,
       );
@@ -369,7 +376,7 @@ class _DevicePainter extends CustomPainter {
         Offset(rocker.left + rocker.width * 0.18, rocker.top + 3),
         Offset(rocker.right - rocker.width * 0.18, rocker.top + 3),
         Paint()
-          ..color = Colors.white.withValues(alpha: 0.88 * opacity)
+          ..color = panel.hi.withValues(alpha: panel.hi.a * opacity)
           ..strokeWidth = 1,
       );
 
@@ -382,8 +389,8 @@ class _DevicePainter extends CustomPainter {
       canvas.drawRRect(
         RRect.fromRectAndRadius(ledRect, const Radius.circular(2)),
         Paint()..color = ledOn
-            ? const Color(0xFF69C83D).withValues(alpha: opacity)
-            : const Color(0xFF969B9A).withValues(alpha: 0.35 * opacity),
+            ? panel.live.withValues(alpha: opacity)
+            : panel.off.withValues(alpha: 0.6 * opacity),
       );
     }
   }

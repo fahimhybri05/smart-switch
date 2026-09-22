@@ -4,6 +4,8 @@
 #include <ESP8266WiFi.h>
 #include <LittleFS.h>
 
+#include "schedule_exec.h"
+
 ConfigStore configStore;
 
 static const char *CONFIG_PATH = "/config.json";
@@ -45,6 +47,8 @@ void ConfigStore::loadDefault() {
   for (uint8_t i = 0; i < SS_CHANNEL_COUNT; i++) {
     _cfg.switches[i].channel_idx = i;
     snprintf(_cfg.switches[i].name, sizeof(_cfg.switches[i].name), "Channel %d", i);
+    strlcpy(_cfg.switches[i].inputMode, "DISABLED", sizeof(_cfg.switches[i].inputMode));
+    _cfg.switches[i].inchingMs = 0;
   }
 
   uint8_t secretBytes[16];
@@ -86,6 +90,8 @@ bool ConfigStore::loadFromDisk() {
     strlcpy(out.type, sw["type"] | "ON_OFF", sizeof(out.type));
     strlcpy(out.default_boot_state, sw["default_boot_state"] | "OFF",
             sizeof(out.default_boot_state));
+    strlcpy(out.inputMode, sw["input_mode"] | "DISABLED", sizeof(out.inputMode));
+    out.inchingMs = sw["inching_ms"] | 0;
   }
 
   JsonArray schedules = doc["schedules"];
@@ -107,6 +113,7 @@ bool ConfigStore::loadFromDisk() {
     out.duration_s = s["duration_s"] | 0;
     out.countdown_started_at = s["_countdown_started_at"] | 0;
     out.enabled = s["enabled"] | true;
+    out.solarOffsetMin = s["solar_offset_min"] | 0;
   }
 
   _cfg.next_schedule_id = doc["_next_schedule_id"] | 1;
@@ -131,6 +138,15 @@ bool ConfigStore::loadFromDisk() {
   strlcpy(_cfg.staticGateway, doc["_static_gateway"] | "", sizeof(_cfg.staticGateway));
   strlcpy(_cfg.staticSubnet, doc["_static_subnet"] | "", sizeof(_cfg.staticSubnet));
   strlcpy(_cfg.staticDns, doc["_static_dns"] | "", sizeof(_cfg.staticDns));
+
+  // New-to-this-port settings — safe false/0.0 defaults cover migration from
+  // an old config file with none of these fields, same as the cloud_secret
+  // migration path above (no special-case logic needed since these defaults
+  // are inert).
+  _cfg.interlockEnabled = doc["interlock_enabled"] | false;
+  _cfg.latitude = doc["latitude"] | 0.0;
+  _cfg.longitude = doc["longitude"] | 0.0;
+  _cfg.locationSet = doc["location_set"] | false;
 
   return true;
 }
@@ -163,6 +179,8 @@ void ConfigStore::save() {
     sw["zone"] = _cfg.switches[i].zone;
     sw["type"] = _cfg.switches[i].type;
     sw["default_boot_state"] = _cfg.switches[i].default_boot_state;
+    sw["input_mode"] = _cfg.switches[i].inputMode;
+    sw["inching_ms"] = _cfg.switches[i].inchingMs;
   }
 
   JsonArray schedules = doc["schedules"].to<JsonArray>();
@@ -186,6 +204,9 @@ void ConfigStore::save() {
       item["duration_s"] = s.duration_s;
       item["_countdown_started_at"] = s.countdown_started_at;
     }
+    if (strcmp(s.type, "sunrise") == 0 || strcmp(s.type, "sunset") == 0) {
+      item["solar_offset_min"] = s.solarOffsetMin;
+    }
     item["enabled"] = s.enabled;
   }
 
@@ -205,27 +226,51 @@ void ConfigStore::save() {
   doc["_static_subnet"] = _cfg.staticSubnet;
   doc["_static_dns"] = _cfg.staticDns;
 
+  doc["interlock_enabled"] = _cfg.interlockEnabled;
+  doc["latitude"] = _cfg.latitude;
+  doc["longitude"] = _cfg.longitude;
+  doc["location_set"] = _cfg.locationSet;
+
   File f = LittleFS.open(CONFIG_TMP_PATH, "w");
   if (!f) {
+    Serial.println("ConfigStore::save: failed to open tmp file for writing; config NOT persisted");
     return;
   }
   serializeJson(doc, f);
   f.close();
-  LittleFS.remove(CONFIG_PATH);
-  LittleFS.rename(CONFIG_TMP_PATH, CONFIG_PATH);
+  // lfs_rename() (which LittleFS::rename() wraps) already atomically replaces
+  // an existing destination file in a single filesystem transaction — there
+  // is no window where neither file exists. An explicit remove() beforehand
+  // would *introduce* exactly that window (power loss between remove() and
+  // rename() would leave the device with no config at all, silently falling
+  // back to loadDefault() + a brand-new random device_id on next boot), so
+  // it must not be done.
+  if (!LittleFS.rename(CONFIG_TMP_PATH, CONFIG_PATH)) {
+    // In-RAM _cfg reflects the intended state but is NOT durably persisted —
+    // no additional recovery here beyond logging; the next successful save()
+    // will still write it out fine.
+    Serial.println("ConfigStore::save: rename tmp->config failed; config NOT durably persisted");
+  }
+}
+
+// Marks the in-RAM config as needing a flush to flash — picked up by loop()
+// once _dirty has been stable for >=500ms. See config_store.h.
+static inline void markDirty(bool *dirty, uint32_t *dirtySinceMs) {
+  *dirty = true;
+  *dirtySinceMs = millis();
 }
 
 void ConfigStore::upsertSwitch(const SsSwitch &sw) {
   for (uint8_t i = 0; i < _cfg.switch_count; i++) {
     if (_cfg.switches[i].channel_idx == sw.channel_idx) {
       _cfg.switches[i] = sw;
-      save();
+      markDirty(&_dirty, &_dirtySinceMs);
       return;
     }
   }
   if (_cfg.switch_count < SS_CHANNEL_COUNT) {
     _cfg.switches[_cfg.switch_count++] = sw;
-    save();
+    markDirty(&_dirty, &_dirtySinceMs);
   }
 }
 
@@ -236,7 +281,7 @@ void ConfigStore::deleteSwitch(uint8_t channel_idx) {
         _cfg.switches[j] = _cfg.switches[j + 1];
       }
       _cfg.switch_count--;
-      save();
+      markDirty(&_dirty, &_dirtySinceMs);
       return;
     }
   }
@@ -249,7 +294,7 @@ bool ConfigStore::upsertSchedule(SsSchedule &inOut) {
     }
     snprintf(inOut.id, sizeof(inOut.id), "s-%lu", (unsigned long)_cfg.next_schedule_id++);
     _cfg.schedules[_cfg.schedule_count++] = inOut;
-    save();
+    markDirty(&_dirty, &_dirtySinceMs);
     return true;
   }
   for (uint8_t i = 0; i < _cfg.schedule_count; i++) {
@@ -259,7 +304,7 @@ bool ConfigStore::upsertSchedule(SsSchedule &inOut) {
         inOut.countdown_started_at = _cfg.schedules[i].countdown_started_at;
       }
       _cfg.schedules[i] = inOut;
-      save();
+      markDirty(&_dirty, &_dirtySinceMs);
       return true;
     }
   }
@@ -273,7 +318,13 @@ bool ConfigStore::deleteSchedule(const char *id) {
         _cfg.schedules[j] = _cfg.schedules[j + 1];
       }
       _cfg.schedule_count--;
-      save();
+      // Free this id's fire-guard slot so it can be reused — otherwise the
+      // table (sized to SS_MAX_SCHEDULES, never shrunk) eventually saturates
+      // with dead ids over the device's lifetime as schedules get
+      // edited/recreated, silently disabling the "already fired this
+      // minute" guard for every schedule created after that point.
+      scheduleExecReleaseFireGuard(id);
+      markDirty(&_dirty, &_dirtySinceMs);
       return true;
     }
   }
@@ -283,12 +334,24 @@ bool ConfigStore::deleteSchedule(const char *id) {
 void ConfigStore::setAuthHash(const uint8_t hash[32]) {
   memcpy(_cfg.auth_password_hash, hash, 32);
   _cfg.auth_password_set = true;
-  save();
+  markDirty(&_dirty, &_dirtySinceMs);
 }
 
 void ConfigStore::setUtcOffset(int16_t offset) {
   _cfg.utc_offset_min = offset;
-  save();
+  markDirty(&_dirty, &_dirtySinceMs);
+}
+
+void ConfigStore::setInterlockEnabled(bool enabled) {
+  _cfg.interlockEnabled = enabled;
+  markDirty(&_dirty, &_dirtySinceMs);
+}
+
+void ConfigStore::setLocation(double latitude, double longitude) {
+  _cfg.latitude = latitude;
+  _cfg.longitude = longitude;
+  _cfg.locationSet = true;
+  markDirty(&_dirty, &_dirtySinceMs);
 }
 
 void ConfigStore::setStaticIp(bool enabled, const char *ip, const char *gateway,
@@ -300,5 +363,18 @@ void ConfigStore::setStaticIp(bool enabled, const char *ip, const char *gateway,
     strlcpy(_cfg.staticSubnet, subnet, sizeof(_cfg.staticSubnet));
     strlcpy(_cfg.staticDns, dns ? dns : "", sizeof(_cfg.staticDns));
   }
+  // Deliberately NOT deferred like the other mutators above: this is the one
+  // config setter whose only caller (POST /api/network's handlePostNetwork,
+  // in http_api.cpp) does a short delay() and then ESP.restart() right
+  // after calling it, with no further loop() iteration in between to ever
+  // pick up a debounced write. Writing synchronously here is simpler than
+  // adding a special early-flush call at that call site.
   save();
+}
+
+void ConfigStore::loop() {
+  if (_dirty && (int32_t)(millis() - _dirtySinceMs) >= 500) {
+    save();
+    _dirty = false;
+  }
 }

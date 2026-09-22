@@ -63,6 +63,34 @@ menu "Smart Switch Reference Board"
         int "Status LED GPIO"
         default 2
 
+    config SS_INPUT_ACTIVE_LOW
+        bool "Physical input GPIOs are active-low (reads LOW when switch/button is engaged)"
+        default y
+
+    config SS_INPUT_CH0_GPIO
+        int "Physical input GPIO for channel 0 (-1 = not wired, disabled for this channel)"
+        default -1
+
+    config SS_INPUT_CH1_GPIO
+        int "Physical input GPIO for channel 1 (-1 = not wired, disabled for this channel)"
+        default -1
+
+    config SS_INPUT_CH2_GPIO
+        int "Physical input GPIO for channel 2 (-1 = not wired, disabled for this channel)"
+        default -1
+
+    config SS_INPUT_CH3_GPIO
+        int "Physical input GPIO for channel 3 (-1 = not wired, disabled for this channel)"
+        default -1
+
+    config SS_INPUT_CH4_GPIO
+        int "Physical input GPIO for channel 4 (-1 = not wired, disabled for this channel)"
+        default -1
+
+    config SS_INPUT_CH5_GPIO
+        int "Physical input GPIO for channel 5 (-1 = not wired, disabled for this channel)"
+        default -1
+
     config SS_CLOUD_WS_URL
         string "Cloud backend WebSocket URL (device tunnel)"
         default "wss://api.smart-switch.shop/device"

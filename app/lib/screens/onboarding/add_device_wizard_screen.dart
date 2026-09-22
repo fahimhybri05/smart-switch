@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -62,6 +63,12 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
   bool _busy = false;
   String? _statusText;
   String? _errorText;
+  String? _ssidErrorText;
+
+  // Every forward transition (via `_goToStep`) pushes the step it left onto
+  // this stack, so a single "back one step" tap can retrace exactly the path
+  // the user took (manual-entry vs QR scan, etc.) instead of guessing.
+  final List<_Step> _backStack = [];
 
   String? _deviceId;
   String? _cloudSecret;
@@ -88,6 +95,60 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
     super.dispose();
   }
 
+  /// Moves forward to [next], remembering the step being left so a later
+  /// "back" tap can retrace it. Use this (not a bare `_step = ...` assign)
+  /// for every forward transition.
+  void _goToStep(_Step next) {
+    setState(() {
+      _backStack.add(_step);
+      _step = next;
+      _errorText = null;
+    });
+  }
+
+  /// Steps back one screen within the wizard without discarding anything —
+  /// distinct from the system/AppBar back button, which fully exits (see
+  /// [_confirmDiscardAndPop]).
+  void _goBack() {
+    if (_backStack.isEmpty) {
+      return;
+    }
+    setState(() {
+      _step = _backStack.removeLast();
+      _errorText = null;
+    });
+  }
+
+  /// Whether the user has moved past the intro with something worth losing
+  /// (a scanned/entered device, WiFi credentials, a chosen room/name).
+  bool get _hasInFlightProgress => _step != _Step.intro && _step != _Step.done;
+
+  /// Confirms before fully exiting the wizard (system back gesture or a pop
+  /// attempted while progress is in flight) — the actual route pop still
+  /// discards everything, this only guards against doing that by accident.
+  Future<void> _confirmDiscardAndPop() async {
+    final shouldDiscard = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Discard this device setup?'),
+        content: const Text('Your progress will be lost.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if ((shouldDiscard ?? false) && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
   Future<void> _openScanner() async {
     final result = await Navigator.of(context).push<QrSetupPayload>(
       MaterialPageRoute(builder: (_) => const _QrScanPage()),
@@ -96,6 +157,7 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
       return;
     }
     setState(() {
+      _backStack.add(_step);
       _deviceId = result.deviceId;
       _cloudSecret = result.cloudSecret;
       _chip = result.chip;
@@ -112,6 +174,7 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
       return;
     }
     setState(() {
+      _backStack.add(_step);
       _deviceId = id;
       _cloudSecret = secret;
       _nameController.text = id;
@@ -122,10 +185,16 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
 
   Future<void> _provisionWifi() async {
     final deviceId = _deviceId!;
+    final ssid = _ssidController.text.trim();
+    if (ssid.isEmpty) {
+      setState(() => _ssidErrorText = 'Enter your WiFi network name.');
+      return;
+    }
     setState(() {
       _busy = true;
       _errorText = null;
       _statusText = null;
+      _ssidErrorText = null;
     });
 
     try {
@@ -135,13 +204,13 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
 
       final outcome = _chip == 'esp8266'
           ? await Esp8266ProvisioningClient().provision(
-              ssid: _ssidController.text.trim(),
+              ssid: ssid,
               password: _passwordController.text,
               onStatus: onStatus,
             )
           : await SoftApProvisioningClient().provision(
               pop: deviceId,
-              ssid: _ssidController.text.trim(),
+              ssid: ssid,
               password: _passwordController.text,
               onStatus: onStatus,
             );
@@ -156,7 +225,12 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
       // _findDevice manages `_busy`/`_errorText` itself from here — don't
       // let this function's cleanup clobber its state (it starts a new
       // busy cycle synchronously below).
-      if (mounted) setState(() => _step = _Step.findDevice);
+      if (mounted) {
+        setState(() {
+          _backStack.add(_step);
+          _step = _Step.findDevice;
+        });
+      }
       unawaited(_findDevice());
     } on ProvisioningException catch (e) {
       setState(() {
@@ -261,6 +335,7 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
     if (mounted) {
       setState(() {
         _busy = false;
+        _backStack.add(_step);
         _step = _Step.room;
       });
     }
@@ -301,7 +376,10 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
   Future<void> _applyRoom() async {
     final room = _roomController.text.trim();
     if (room.isEmpty) {
-      setState(() => _step = _Step.name);
+      setState(() {
+        _backStack.add(_step);
+        _step = _Step.name;
+      });
       return;
     }
     setState(() {
@@ -319,10 +397,17 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
             zone: room,
             type: sw.type,
             defaultBootState: sw.defaultBootState,
+            inputMode: sw.inputMode,
+            inchingMs: sw.inchingMs,
           ),
         );
       }
-      if (mounted) setState(() => _step = _Step.name);
+      if (mounted) {
+        setState(() {
+          _backStack.add(_step);
+          _step = _Step.name;
+        });
+      }
     } catch (e) {
       setState(() => _errorText = "Couldn't set the room: $e");
     } finally {
@@ -342,72 +427,174 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
             .upsert(existing.copyWith(friendlyName: name));
       }
     }
-    if (mounted) setState(() => _step = _Step.done);
+    if (mounted) {
+      setState(() {
+        _backStack.add(_step);
+        _step = _Step.done;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Add device')),
-      body: ListView(
-        padding: const EdgeInsets.all(Spacing.md),
-        children: [
-          if (_errorText != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: Spacing.md),
-              child: Text(
-                _errorText!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+    // A back-one-step tap within the wizard is handled entirely by
+    // `_goBack` (never pops the route), so it's always safe regardless of
+    // `_hasInFlightProgress`. Only the actual route pop (system back
+    // gesture, or this same AppBar icon when there's no in-wizard step left
+    // to retreat to) needs the discard confirmation below.
+    final canGoBackOneStep = _backStack.isNotEmpty && _step != _Step.done;
+    return PopScope(
+      canPop: !_hasInFlightProgress,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) {
+          return;
+        }
+        await _confirmDiscardAndPop();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Add device'),
+          leading: canGoBackOneStep
+              ? IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  tooltip: 'Back',
+                  onPressed: _busy ? null : _goBack,
+                )
+              : null,
+        ),
+        body: ListView(
+          padding: const EdgeInsets.all(Spacing.md),
+          children: [
+            if (_errorText != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: Spacing.md),
+                child: _ErrorBanner(_errorText!),
               ),
+            switch (_step) {
+              _Step.intro => _IntroStep(
+                onScan: _openScanner,
+                onManualEntry: () => _goToStep(_Step.manualEntry),
+                onScanNetwork: () =>
+                    Navigator.of(context).pushNamed(AppRoutes.scanDevices),
+              ),
+              _Step.manualEntry => _ManualEntryStep(
+                idController: _manualIdController,
+                secretController: _manualSecretController,
+                chip: _chip,
+                onChipChanged: (chip) => setState(() => _chip = chip),
+                onContinue: _confirmManualEntry,
+              ),
+              _Step.found => _FoundStep(
+                deviceId: _deviceId!,
+                onContinue: () => _goToStep(_Step.wifi),
+              ),
+              _Step.wifi => _WifiStep(
+                ssidController: _ssidController,
+                passwordController: _passwordController,
+                busy: _busy,
+                statusText: _statusText,
+                ssidErrorText: _ssidErrorText,
+                onSsidChanged: () {
+                  if (_ssidErrorText != null) {
+                    setState(() => _ssidErrorText = null);
+                  }
+                },
+                onProvision: _provisionWifi,
+              ),
+              _Step.findDevice => _FindDeviceStep(
+                busy: _busy,
+                statusText: _statusText,
+                ipController: _manualIpController,
+                onRetry: () => unawaited(_findDevice()),
+                onUseManualIp: () =>
+                    unawaited(_useManualIp(_manualIpController.text)),
+              ),
+              _Step.room => _RoomStep(
+                roomController: _roomController,
+                busy: _busy,
+                onContinue: _applyRoom,
+              ),
+              _Step.name => _NameStep(
+                nameController: _nameController,
+                onContinue: _finishNaming,
+              ),
+              _Step.done => _DoneStep(
+                onDone: () =>
+                    Navigator.of(context).popUntil((route) => route.isFirst),
+              ),
+            },
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Rounded, bordered warning banner for step errors — matches the app's
+/// milled-panel card treatment instead of a bare line of red text.
+class _ErrorBanner extends StatelessWidget {
+  const _ErrorBanner(this.message);
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(Spacing.md),
+      decoration: BoxDecoration(
+        color: colorScheme.errorContainer,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colorScheme.error.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.error_outline_rounded,
+            color: colorScheme.error,
+            size: 20,
+          ),
+          const SizedBox(width: Spacing.sm),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: colorScheme.onErrorContainer),
             ),
-          switch (_step) {
-            _Step.intro => _IntroStep(
-              onScan: _openScanner,
-              onManualEntry: () => setState(() => _step = _Step.manualEntry),
-              onScanNetwork: () =>
-                  Navigator.of(context).pushNamed(AppRoutes.scanDevices),
-            ),
-            _Step.manualEntry => _ManualEntryStep(
-              idController: _manualIdController,
-              secretController: _manualSecretController,
-              chip: _chip,
-              onChipChanged: (chip) => setState(() => _chip = chip),
-              onContinue: _confirmManualEntry,
-            ),
-            _Step.found => _FoundStep(
-              deviceId: _deviceId!,
-              onContinue: () => setState(() => _step = _Step.wifi),
-            ),
-            _Step.wifi => _WifiStep(
-              ssidController: _ssidController,
-              passwordController: _passwordController,
-              busy: _busy,
-              statusText: _statusText,
-              onProvision: _provisionWifi,
-            ),
-            _Step.findDevice => _FindDeviceStep(
-              busy: _busy,
-              statusText: _statusText,
-              ipController: _manualIpController,
-              onRetry: () => unawaited(_findDevice()),
-              onUseManualIp: () =>
-                  unawaited(_useManualIp(_manualIpController.text)),
-            ),
-            _Step.room => _RoomStep(
-              roomController: _roomController,
-              busy: _busy,
-              onContinue: _applyRoom,
-            ),
-            _Step.name => _NameStep(
-              nameController: _nameController,
-              onContinue: _finishNaming,
-            ),
-            _Step.done => _DoneStep(
-              onDone: () =>
-                  Navigator.of(context).popUntil((route) => route.isFirst),
-            ),
-          },
+          ),
         ],
+      ),
+    );
+  }
+}
+
+/// The badge-shaped icon plate that opens every wizard step — a soft tonal
+/// square with a single glyph, matching Material 3's borderless "icon
+/// container" convention. Purely decorative framing; carries no state.
+class _WizardIcon extends StatelessWidget {
+  const _WizardIcon(this.icon, {this.background, this.foreground});
+
+  final IconData icon;
+  final Color? background;
+  final Color? foreground;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Container(
+        width: 64,
+        height: 64,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: background ?? colorScheme.primaryContainer,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Icon(
+          icon,
+          size: 30,
+          color: foreground ?? colorScheme.onPrimaryContainer,
+        ),
       ),
     );
   }
@@ -429,16 +616,22 @@ class _IntroStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const _WizardIcon(Icons.electrical_services_rounded),
+        const SizedBox(height: Spacing.md),
         Text(
           'Add your smart switch',
+          textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         const SizedBox(height: Spacing.sm),
-        const Text('Scan the QR code on your device.'),
+        const Text(
+          'Scan the QR code on your device.',
+          textAlign: TextAlign.center,
+        ),
         const SizedBox(height: Spacing.lg),
         FilledButton.icon(
           onPressed: onScan,
-          icon: const Icon(Icons.qr_code_scanner),
+          icon: const Icon(Icons.qr_code_scanner_rounded),
           label: const Text('Scan QR code'),
         ),
         const SizedBox(height: Spacing.sm),
@@ -449,11 +642,16 @@ class _IntroStep extends StatelessWidget {
         const SizedBox(height: Spacing.lg),
         const Divider(),
         const SizedBox(height: Spacing.sm),
-        Text('Already set up?', style: Theme.of(context).textTheme.titleSmall),
+        Text(
+          'Already set up?',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
         const SizedBox(height: Spacing.xs),
         const Text(
           "If it's already on this WiFi (added from another phone, or "
           "removed from this one), scan the network to find it instead.",
+          textAlign: TextAlign.center,
         ),
         const SizedBox(height: Spacing.sm),
         OutlinedButton.icon(
@@ -486,34 +684,46 @@ class _ManualEntryStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const _WizardIcon(Icons.keyboard_alt_outlined),
+        const SizedBox(height: Spacing.md),
         Text(
           'Enter device code',
+          textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         const SizedBox(height: Spacing.sm),
         const Text(
           "Both values are on the device's serial log at flash time and on "
           'the printed sticker.',
+          textAlign: TextAlign.center,
         ),
         const SizedBox(height: Spacing.lg),
-        SegmentedButton<String>(
-          segments: const [
-            ButtonSegment(value: 'esp32', label: Text('ESP32')),
-            ButtonSegment(value: 'esp8266', label: Text('ESP8266')),
-          ],
-          selected: {chip},
-          onSelectionChanged: (selection) => onChipChanged(selection.first),
+        Center(
+          child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'esp32', label: Text('ESP32')),
+              ButtonSegment(value: 'esp8266', label: Text('ESP8266')),
+            ],
+            selected: {chip},
+            onSelectionChanged: (selection) => onChipChanged(selection.first),
+          ),
         ),
         const SizedBox(height: Spacing.md),
         TextField(
           controller: idController,
-          decoration: const InputDecoration(labelText: 'Device ID'),
+          decoration: const InputDecoration(
+            labelText: 'Device ID',
+            prefixIcon: Icon(Icons.tag_rounded),
+          ),
           autocorrect: false,
         ),
         const SizedBox(height: Spacing.sm),
         TextField(
           controller: secretController,
-          decoration: const InputDecoration(labelText: 'Cloud secret'),
+          decoration: const InputDecoration(
+            labelText: 'Cloud secret',
+            prefixIcon: Icon(Icons.key_outlined),
+          ),
           autocorrect: false,
         ),
         const SizedBox(height: Spacing.lg),
@@ -534,10 +744,10 @@ class _FoundStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Icon(
-          Icons.check_circle,
-          size: 64,
-          color: Theme.of(context).colorScheme.primary,
+        _WizardIcon(
+          Icons.task_alt_rounded,
+          background: Theme.of(context).colorScheme.tertiaryContainer,
+          foreground: Theme.of(context).colorScheme.onTertiaryContainer,
         ),
         const SizedBox(height: Spacing.md),
         Text(
@@ -552,7 +762,10 @@ class _FoundStep extends StatelessWidget {
           style: Theme.of(context).textTheme.bodyLarge,
         ),
         const SizedBox(height: Spacing.lg),
-        const Text("Let's connect this switch to your WiFi."),
+        const Text(
+          "Let's connect this switch to your WiFi.",
+          textAlign: TextAlign.center,
+        ),
         const SizedBox(height: Spacing.md),
         FilledButton(onPressed: onContinue, child: const Text('Continue')),
       ],
@@ -566,6 +779,8 @@ class _WifiStep extends StatelessWidget {
     required this.passwordController,
     required this.busy,
     required this.statusText,
+    required this.ssidErrorText,
+    required this.onSsidChanged,
     required this.onProvision,
   });
 
@@ -573,6 +788,8 @@ class _WifiStep extends StatelessWidget {
   final TextEditingController passwordController;
   final bool busy;
   final String? statusText;
+  final String? ssidErrorText;
+  final VoidCallback onSsidChanged;
   final VoidCallback onProvision;
 
   @override
@@ -580,25 +797,37 @@ class _WifiStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const _WizardIcon(Icons.wifi_rounded),
+        const SizedBox(height: Spacing.md),
         Text(
           'Connect to your WiFi',
+          textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         const SizedBox(height: Spacing.sm),
         const Text(
           'Make sure your phone is still connected to the '
           "device's temporary network, then enter your home WiFi details.",
+          textAlign: TextAlign.center,
         ),
         const SizedBox(height: Spacing.lg),
         TextField(
           controller: ssidController,
-          decoration: const InputDecoration(labelText: 'WiFi network name'),
+          decoration: InputDecoration(
+            labelText: 'WiFi network name',
+            prefixIcon: const Icon(Icons.wifi_rounded),
+            errorText: ssidErrorText,
+          ),
           autocorrect: false,
+          onChanged: (_) => onSsidChanged(),
         ),
         const SizedBox(height: Spacing.sm),
         TextField(
           controller: passwordController,
-          decoration: const InputDecoration(labelText: 'WiFi password'),
+          decoration: const InputDecoration(
+            labelText: 'WiFi password',
+            prefixIcon: Icon(Icons.lock_outline_rounded),
+          ),
           obscureText: true,
         ),
         const SizedBox(height: Spacing.lg),
@@ -615,7 +844,7 @@ class _WifiStep extends StatelessWidget {
         if (statusText != null)
           Padding(
             padding: const EdgeInsets.only(top: Spacing.sm),
-            child: Text(statusText!),
+            child: Text(statusText!, textAlign: TextAlign.center),
           ),
       ],
     );
@@ -642,8 +871,11 @@ class _FindDeviceStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const _WizardIcon(Icons.travel_explore_rounded),
+        const SizedBox(height: Spacing.md),
         Text(
           'Finding your device',
+          textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         const SizedBox(height: Spacing.sm),
@@ -660,15 +892,25 @@ class _FindDeviceStep extends StatelessWidget {
         if (!busy) ...[
           FilledButton(onPressed: onRetry, child: const Text('Search again')),
           const SizedBox(height: Spacing.lg),
-          const Text('Still nothing? Enter its IP address manually:'),
+          const Divider(),
+          const SizedBox(height: Spacing.sm),
+          const Text(
+            'Still nothing? Enter its IP address manually:',
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: Spacing.sm),
           TextField(
             controller: ipController,
             decoration: const InputDecoration(
               labelText: 'Device IP address',
               hintText: 'e.g. 192.168.1.42',
+              prefixIcon: Icon(Icons.lan_outlined),
             ),
-            keyboardType: TextInputType.number,
+            // Plain `number` blocks the "." key on some mobile keyboards,
+            // which an IPv4 address needs — use the standard text keyboard
+            // (which has a period) restricted to digits and dots instead.
+            keyboardType: TextInputType.text,
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
             autocorrect: false,
           ),
           const SizedBox(height: Spacing.sm),
@@ -698,10 +940,17 @@ class _RoomStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Choose a room', style: Theme.of(context).textTheme.headlineSmall),
+        const _WizardIcon(Icons.home_work_outlined),
+        const SizedBox(height: Spacing.md),
+        Text(
+          'Choose a room',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.headlineSmall,
+        ),
         const SizedBox(height: Spacing.sm),
         const Text(
           'This groups the switch under Rooms. You can change it later.',
+          textAlign: TextAlign.center,
         ),
         const SizedBox(height: Spacing.lg),
         TextField(
@@ -709,6 +958,7 @@ class _RoomStep extends StatelessWidget {
           decoration: const InputDecoration(
             labelText: 'Room (optional)',
             hintText: 'e.g. Living Room',
+            prefixIcon: Icon(Icons.meeting_room_outlined),
           ),
         ),
         const SizedBox(height: Spacing.lg),
@@ -738,14 +988,20 @@ class _NameStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const _WizardIcon(Icons.badge_outlined),
+        const SizedBox(height: Spacing.md),
         Text(
           'Name your switch',
+          textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         const SizedBox(height: Spacing.lg),
         TextField(
           controller: nameController,
-          decoration: const InputDecoration(labelText: 'Device name'),
+          decoration: const InputDecoration(
+            labelText: 'Device name',
+            prefixIcon: Icon(Icons.edit_outlined),
+          ),
         ),
         const SizedBox(height: Spacing.lg),
         FilledButton(onPressed: onContinue, child: const Text('Continue')),
@@ -764,16 +1020,24 @@ class _DoneStep extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Icon(
-          Icons.celebration,
-          size: 64,
-          color: Theme.of(context).colorScheme.primary,
+        _WizardIcon(
+          Icons.emoji_events_rounded,
+          background: Theme.of(context).colorScheme.tertiaryContainer,
+          foreground: Theme.of(context).colorScheme.onTertiaryContainer,
         ),
         const SizedBox(height: Spacing.md),
         Text(
           "You're all set!",
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.headlineSmall,
+        ),
+        const SizedBox(height: Spacing.xs),
+        Text(
+          'Your switch is on the network and ready to control.',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
         const SizedBox(height: Spacing.lg),
         FilledButton(onPressed: onDone, child: const Text('Done')),
@@ -819,9 +1083,42 @@ class _QrScanPageState extends State<_QrScanPage> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Scan QR code')),
-      body: MobileScanner(controller: _controller, onDetect: _onDetect),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          MobileScanner(controller: _controller, onDetect: _onDetect),
+          IgnorePointer(
+            child: Center(
+              child: Container(
+                width: 240,
+                height: 240,
+                decoration: BoxDecoration(
+                  border: Border.all(color: colorScheme.primary, width: 3),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: Spacing.xl,
+            child: Text(
+              'Point your camera at the sticker on the device',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Colors.white,
+                shadows: const [
+                  Shadow(color: Colors.black87, blurRadius: 8),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

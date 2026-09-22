@@ -2,19 +2,25 @@ enum ScheduleType {
   once,
   daily,
   weekly,
-  countdown;
+  countdown,
+  sunrise,
+  sunset;
 
   String toJson() => switch (this) {
     ScheduleType.once => 'once',
     ScheduleType.daily => 'daily',
     ScheduleType.weekly => 'weekly',
     ScheduleType.countdown => 'countdown',
+    ScheduleType.sunrise => 'sunrise',
+    ScheduleType.sunset => 'sunset',
   };
 
   static ScheduleType fromJson(String value) => switch (value) {
     'daily' => ScheduleType.daily,
     'weekly' => ScheduleType.weekly,
     'countdown' => ScheduleType.countdown,
+    'sunrise' => ScheduleType.sunrise,
+    'sunset' => ScheduleType.sunset,
     _ => ScheduleType.once,
   };
 }
@@ -30,7 +36,11 @@ enum ScheduleAction {
 }
 
 /// Mirrors spec §2's schedule rows. [time]/[days] are only populated for
-/// clock-based types (once/daily/weekly); [durationS] only for countdown.
+/// clock-based types (once/daily/weekly); [durationS] only for countdown;
+/// [solarOffsetMin] only for sunrise/sunset (minutes to shift the device's
+/// computed sunrise/sunset time — negative = before, positive = after;
+/// requires the device to have a location configured, see
+/// `DeviceConfig.locationSet`).
 class Schedule {
   const Schedule({
     required this.id,
@@ -41,6 +51,7 @@ class Schedule {
     this.time,
     this.days,
     this.durationS,
+    this.solarOffsetMin,
   });
 
   final String id;
@@ -51,6 +62,7 @@ class Schedule {
   final String? time; // "HH:MM", clock-based schedules only
   final List<int>? days; // 1=Mon..7=Sun, clock-based schedules only
   final int? durationS; // countdown schedules only
+  final int? solarOffsetMin; // sunrise/sunset schedules only
 
   factory Schedule.fromJson(Map<String, dynamic> json) => Schedule(
     id: json['id'] as String,
@@ -61,6 +73,7 @@ class Schedule {
     time: json['time'] as String?,
     days: (json['days'] as List<dynamic>?)?.cast<int>(),
     durationS: json['duration_s'] as int?,
+    solarOffsetMin: json['solar_offset_min'] as int?,
   );
 
   Map<String, dynamic> toJson() => {
@@ -72,5 +85,6 @@ class Schedule {
     if (time != null) 'time': time,
     if (days != null) 'days': days,
     if (durationS != null) 'duration_s': durationS,
+    if (solarOffsetMin != null) 'solar_offset_min': solarOffsetMin,
   };
 }

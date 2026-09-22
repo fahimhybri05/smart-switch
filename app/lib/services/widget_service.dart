@@ -28,25 +28,51 @@ Future<void> initializeWidgetSupport() async {
   await HomeWidget.registerInteractivityCallback(widgetInteractionCallback);
 }
 
+// Both this file's functions and widgetInteractionCallback below run (at
+// least sometimes) in a headless isolate — a tapped home-screen widget, or
+// via background_monitor_service.dart's WorkManager pass — that opens the
+// SAME Hive boxes (`pinned_switches`, `last_states`, `app_settings`, and
+// transitively `auth_session`) the main app isolate independently keeps
+// open for its whole lifetime. Hive CE's own source documents this as
+// unsafe (`HiveWarning.unsafeIsolate`: per-isolate box caches, possible
+// state corruption). A full fix would route this through a platform
+// channel back to the main isolate; out of scope for this pass. Mitigation
+// applied throughout this file instead: open each box, do the one
+// read/write, close it again immediately, rather than holding it open —
+// shrinks (doesn't eliminate) the window where two isolates could have the
+// same box open at once.
+
 Future<List<PinnedSwitch>> getPinnedSwitches() async {
   final box = await Hive.openBox(_pinnedBoxName);
-  final raw = (box.get('list') as List?) ?? const [];
-  return raw
-      .map((e) => PinnedSwitch.fromJson(Map<String, dynamic>.from(e as Map)))
-      .toList();
+  try {
+    final raw = (box.get('list') as List?) ?? const [];
+    return raw
+        .map(
+          (e) => PinnedSwitch.fromJson(Map<String, dynamic>.from(e as Map)),
+        )
+        .toList();
+  } finally {
+    await box.close();
+  }
 }
 
 Future<void> setPinnedSwitches(List<PinnedSwitch> pinned) async {
   final capped = pinned.take(maxPinnedSwitches).toList();
   final box = await Hive.openBox(_pinnedBoxName);
-  await box.put('list', capped.map((p) => p.toJson()).toList());
+  try {
+    await box.put('list', capped.map((p) => p.toJson()).toList());
+  } finally {
+    await box.close();
+  }
   await refreshWidgetStorage();
 }
 
 /// Rebuilds the widget's persisted display data from the pinned list,
 /// preferring App 4's cached `last_states` and falling back to one live
 /// fetch per pinned device otherwise. Safe to call from the foreground app
-/// or from the background monitor's isolate — both already open Hive.
+/// or from the background monitor's isolate — both already open Hive (see
+/// this file's top-of-file doc comment re: the unsafe-multi-isolate-access
+/// mitigation applied here).
 Future<void> refreshWidgetStorage() async {
   if (!_widgetSupported) {
     return;
@@ -59,17 +85,22 @@ Future<void> refreshWidgetStorage() async {
     return;
   }
 
-  final lastStatesBox = await Hive.openBox(_lastStatesBoxName);
   final settings = AppSettingsService();
   await settings.init();
   final backendUrl = settings.getBackendUrl();
+  await settings.close();
 
+  final lastStatesBox = await Hive.openBox(_lastStatesBoxName);
   final entries = <Map<String, dynamic>>[];
-  for (final p in pinned) {
-    entries.add({
-      ...p.toJson(),
-      'state': await _resolveState(p, lastStatesBox, backendUrl),
-    });
+  try {
+    for (final p in pinned) {
+      entries.add({
+        ...p.toJson(),
+        'state': await _resolveState(p, lastStatesBox, backendUrl),
+      });
+    }
+  } finally {
+    await lastStatesBox.close();
   }
 
   await HomeWidget.saveWidgetData<String>(
@@ -142,11 +173,13 @@ Future<void> widgetInteractionCallback(Uri? uri) async {
 
   final settings = AppSettingsService();
   await settings.init();
+  final backendUrl = settings.getBackendUrl();
+  await settings.close();
 
   final result = await viaLocalOrCloud(
     deviceId: deviceId,
     lastKnownIp: ip,
-    backendUrl: settings.getBackendUrl(),
+    backendUrl: backendUrl,
     call: (client) async {
       await client.setChannelState(channelIdx, newState);
       return true;

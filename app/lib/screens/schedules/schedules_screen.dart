@@ -11,6 +11,7 @@ import '../../theme/spacing.dart';
 import '../shared/device_sync_gate.dart';
 import '../shared/empty_state_view.dart';
 import '../shared/error_view.dart';
+import '../shared/friendly_error.dart';
 import '../shared/skeleton_loader.dart';
 
 class SchedulesScreen extends ConsumerStatefulWidget {
@@ -117,26 +118,147 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
   }
 }
 
-class _ScheduleList extends ConsumerWidget {
+class _ScheduleList extends ConsumerStatefulWidget {
   const _ScheduleList({required this.device, required this.config});
 
   final KnownDevice device;
   final DeviceConfig config;
 
+  @override
+  ConsumerState<_ScheduleList> createState() => _ScheduleListState();
+}
+
+class _ScheduleListState extends ConsumerState<_ScheduleList> {
+  // Gap 1 (optimistic enable/disable toggle): schedule.id -> the value shown
+  // immediately on tap, ahead of the network round-trip, mirroring
+  // DeviceTile._toggle's optimistic pattern (but scoped locally here rather
+  // than via channelOverrideProvider, which is specific to device channel
+  // state). Cleared once the in-flight request settles.
+  final Map<String, bool> _optimisticEnabled = {};
+  final Set<String> _pendingToggles = {};
+
+  // Gap 2 (animated delete): schedule.id -> mid-removal-animation state.
+  // `_fadingIds` drives an opacity fade-out while the item is still at full
+  // size; once that fade completes we move the id into `_collapsedIds`,
+  // which swaps the item's content for a zero-size placeholder so
+  // AnimatedSize can smoothly collapse the space it occupied, instead of the
+  // item just vanishing the instant the schedule disappears from `config`.
+  final Set<String> _fadingIds = {};
+  final Set<String> _collapsedIds = {};
+
+  KnownDevice get device => widget.device;
+  DeviceConfig get config => widget.config;
+
+  Future<void> _toggleEnabled(Schedule schedule, bool enabled) async {
+    setState(() {
+      _optimisticEnabled[schedule.id] = enabled;
+      _pendingToggles.add(schedule.id);
+    });
+    try {
+      final client = ref.read(activeDeviceApiClientProvider(device));
+      await client.upsertSchedule(
+        Schedule(
+          id: schedule.id,
+          channelIdx: schedule.channelIdx,
+          action: schedule.action,
+          type: schedule.type,
+          enabled: enabled,
+          time: schedule.time,
+          days: schedule.days,
+          durationS: schedule.durationS,
+          solarOffsetMin: schedule.solarOffsetMin,
+        ),
+      );
+      ref.invalidate(deviceConfigProvider(device));
+      if (mounted) {
+        setState(() => _optimisticEnabled.remove(schedule.id));
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _optimisticEnabled.remove(schedule.id));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e, 'Update'))),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _pendingToggles.remove(schedule.id));
+      }
+    }
+  }
+
+  Future<void> _confirmDelete(Schedule schedule) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete schedule?'),
+        content: Text('Delete "${_summaryFor(schedule, config)}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _fadingIds.add(schedule.id));
+    final client = ref.read(activeDeviceApiClientProvider(device));
+    final deleteFuture = client.deleteSchedule(schedule.id);
+
+    // Let the fade play out (item still full-size) before collapsing the
+    // space it occupies, so the removal reads as fade-then-shrink rather
+    // than an instant cut. The network call above runs concurrently so this
+    // doesn't add latency beyond the animation itself.
+    await Future.delayed(Motion.fast);
+    if (mounted) {
+      setState(() {
+        _fadingIds.remove(schedule.id);
+        _collapsedIds.add(schedule.id);
+      });
+    }
+
+    try {
+      await deleteFuture;
+      ref.invalidate(deviceConfigProvider(device));
+    } catch (e) {
+      if (mounted) {
+        setState(() => _collapsedIds.remove(schedule.id));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e, 'Delete'))),
+        );
+      }
+    }
+  }
+
   IconData _iconFor(ScheduleType type) {
     switch (type) {
       case ScheduleType.countdown:
-        return Icons.timer_outlined;
+        return Icons.hourglass_bottom_outlined;
       case ScheduleType.once:
         return Icons.event_outlined;
       case ScheduleType.daily:
+        return Icons.today_outlined;
       case ScheduleType.weekly:
-        return Icons.schedule_outlined;
+        return Icons.date_range_outlined;
+      case ScheduleType.sunrise:
+        return Icons.wb_twilight_outlined;
+      case ScheduleType.sunset:
+        return Icons.nights_stay_outlined;
     }
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     if (config.schedules.isEmpty) {
       return const EmptyStateView(
         icon: Icons.schedule_outlined,
@@ -149,64 +271,70 @@ class _ScheduleList extends ConsumerWidget {
       padding: const EdgeInsets.symmetric(vertical: Spacing.sm),
       children: [
         for (final schedule in config.schedules)
-          Card(
-            child: ListTile(
-              leading: CircleAvatar(
-                backgroundColor: Theme.of(
-                  context,
-                ).colorScheme.secondaryContainer,
-                child: Icon(
-                  _iconFor(schedule.type),
-                  color: Theme.of(context).colorScheme.onSecondaryContainer,
-                ),
-              ),
-              title: Text(_summaryFor(schedule, config)),
-              subtitle: Text(_scheduleDescription(schedule)),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Switch(
-                    value: schedule.enabled,
-                    onChanged: (enabled) async {
-                      final client = ref.read(
-                        activeDeviceApiClientProvider(device),
-                      );
-                      await client.upsertSchedule(
-                        Schedule(
-                          id: schedule.id,
-                          channelIdx: schedule.channelIdx,
-                          action: schedule.action,
-                          type: schedule.type,
-                          enabled: enabled,
-                          time: schedule.time,
-                          days: schedule.days,
-                          durationS: schedule.durationS,
+          AnimatedSize(
+            key: ValueKey(schedule.id),
+            duration: Motion.medium,
+            curve: Motion.standard,
+            alignment: Alignment.topCenter,
+            child: AnimatedOpacity(
+              duration: Motion.fast,
+              opacity: _fadingIds.contains(schedule.id) ? 0 : 1,
+              child: _collapsedIds.contains(schedule.id)
+                  ? const SizedBox(width: double.infinity)
+                  : Card(
+                      child: ListTile(
+                        leading: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            _iconFor(schedule.type),
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onPrimaryContainer,
+                            size: 20,
+                          ),
                         ),
-                      );
-                      ref.invalidate(deviceConfigProvider(device));
-                    },
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () async {
-                      final client = ref.read(
-                        activeDeviceApiClientProvider(device),
-                      );
-                      await client.deleteSchedule(schedule.id);
-                      ref.invalidate(deviceConfigProvider(device));
-                    },
-                  ),
-                ],
-              ),
-              onTap: () => showModalBottomSheet<void>(
-                context: context,
-                isScrollControlled: true,
-                builder: (context) => _ScheduleEditorSheet(
-                  device: device,
-                  config: config,
-                  existing: schedule,
-                ),
-              ),
+                        title: Text(_summaryFor(schedule, config)),
+                        subtitle: Text(_scheduleDescription(schedule)),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Switch(
+                              value:
+                                  _optimisticEnabled[schedule.id] ??
+                                  schedule.enabled,
+                              onChanged: _pendingToggles.contains(schedule.id)
+                                  ? null
+                                  : (enabled) =>
+                                        _toggleEnabled(schedule, enabled),
+                            ),
+                            const SizedBox(width: Spacing.xs),
+                            IconButton(
+                              icon: Icon(
+                                Icons.delete_outline,
+                                color: Theme.of(context).colorScheme.error,
+                              ),
+                              onPressed: () => _confirmDelete(schedule),
+                            ),
+                          ],
+                        ),
+                        onTap: () => showModalBottomSheet<void>(
+                          context: context,
+                          isScrollControlled: true,
+                          builder: (context) => _ScheduleEditorSheet(
+                            device: device,
+                            config: config,
+                            existing: schedule,
+                          ),
+                        ),
+                      ),
+                    ),
             ),
           ),
       ],
@@ -233,7 +361,16 @@ class _ScheduleList extends ConsumerWidget {
         return 'Weekly at ${schedule.time} ($days)';
       case ScheduleType.countdown:
         return 'Countdown: ${schedule.durationS}s';
+      case ScheduleType.sunrise:
+        return 'Sunrise${_offsetSuffix(schedule.solarOffsetMin)}';
+      case ScheduleType.sunset:
+        return 'Sunset${_offsetSuffix(schedule.solarOffsetMin)}';
     }
+  }
+
+  String _offsetSuffix(int? offsetMin) {
+    if (offsetMin == null || offsetMin == 0) return '';
+    return offsetMin > 0 ? ' (+${offsetMin}m)' : ' (${offsetMin}m)';
   }
 }
 
@@ -260,6 +397,7 @@ class _ScheduleEditorSheetState extends ConsumerState<_ScheduleEditorSheet> {
   TimeOfDay _time = const TimeOfDay(hour: 18, minute: 0);
   Set<int> _days = {1, 2, 3, 4, 5, 6, 7};
   int _durationS = 300;
+  int _solarOffsetMin = 0;
   bool _saving = false;
 
   @override
@@ -281,12 +419,19 @@ class _ScheduleEditorSheetState extends ConsumerState<_ScheduleEditorSheet> {
       _days = existing!.days!.toSet();
     }
     _durationS = existing?.durationS ?? 300;
+    _solarOffsetMin = existing?.solarOffsetMin ?? 0;
   }
 
   String get _timeString =>
       '${_time.hour.toString().padLeft(2, '0')}:${_time.minute.toString().padLeft(2, '0')}';
 
-  bool get _isClockType => _type != ScheduleType.countdown;
+  bool get _isWallClockType =>
+      _type == ScheduleType.once ||
+      _type == ScheduleType.daily ||
+      _type == ScheduleType.weekly;
+
+  bool get _isSolarType =>
+      _type == ScheduleType.sunrise || _type == ScheduleType.sunset;
 
   Future<void> _save() async {
     setState(() => _saving = true);
@@ -296,9 +441,10 @@ class _ScheduleEditorSheetState extends ConsumerState<_ScheduleEditorSheet> {
       action: _action,
       type: _type,
       enabled: widget.existing?.enabled ?? true,
-      time: _isClockType ? _timeString : null,
+      time: _isWallClockType ? _timeString : null,
       days: _type == ScheduleType.weekly ? (_days.toList()..sort()) : null,
       durationS: _type == ScheduleType.countdown ? _durationS : null,
+      solarOffsetMin: _isSolarType ? _solarOffsetMin : null,
     );
 
     try {
@@ -389,11 +535,43 @@ class _ScheduleEditorSheetState extends ConsumerState<_ScheduleEditorSheet> {
                   value: ScheduleType.countdown,
                   child: Text('Countdown timer'),
                 ),
+                DropdownMenuItem(
+                  value: ScheduleType.sunrise,
+                  child: Text('Sunrise'),
+                ),
+                DropdownMenuItem(
+                  value: ScheduleType.sunset,
+                  child: Text('Sunset'),
+                ),
               ],
               onChanged: (v) => setState(() => _type = v!),
             ),
             const SizedBox(height: Spacing.sm),
-            if (_isClockType)
+            if (_isSolarType && !widget.config.locationSet)
+              Padding(
+                padding: const EdgeInsets.only(bottom: Spacing.sm),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.secondary,
+                    ),
+                    const SizedBox(width: Spacing.sm),
+                    Expanded(
+                      child: Text(
+                        "This device has no location set — set it under "
+                        "Settings before saving, or this schedule won't fire.",
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.secondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (_isWallClockType)
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Time'),
@@ -443,6 +621,21 @@ class _ScheduleEditorSheetState extends ConsumerState<_ScheduleEditorSheet> {
                 ),
                 keyboardType: TextInputType.number,
                 onChanged: (v) => _durationS = int.tryParse(v) ?? _durationS,
+              ),
+            if (_isSolarType)
+              TextFormField(
+                initialValue: _solarOffsetMin.toString(),
+                decoration: const InputDecoration(
+                  labelText: 'Offset (minutes)',
+                  helperText: 'Negative = before, positive = after, e.g. '
+                      '-30 for "30 min before sunset"',
+                  helperMaxLines: 2,
+                ),
+                keyboardType: const TextInputType.numberWithOptions(
+                  signed: true,
+                ),
+                onChanged: (v) =>
+                    _solarOffsetMin = int.tryParse(v) ?? _solarOffsetMin,
               ),
             const SizedBox(height: Spacing.lg),
             FilledButton(

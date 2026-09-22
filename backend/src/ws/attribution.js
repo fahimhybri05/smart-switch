@@ -7,6 +7,13 @@
 // deviceServer.js consumes it once, on the matching echo. Also carries
 // automation cascade-depth/chain data for loop protection (see
 // automations/engine.js) — same map, one mechanism, per docs/plan.md.
+//
+// Each key holds a FIFO queue of pending entries, not a single value — a
+// second command to the same deviceId/channelIdx/state landing within the
+// TTL of an in-flight one would otherwise clobber (Map.set-overwrite) the
+// first entry's cascade-depth/chain data, letting MAX_AUTOMATION_HOP_DEPTH
+// be bypassed. Ordering is preserved: first command in, first echo
+// consumed.
 const pending = new Map();
 const TTL_MS = 8_000;
 
@@ -23,19 +30,33 @@ function key(deviceId, channelIdx, state) {
  * @param {Set<number>} [attribution.chainAutomationIds]
  */
 export function noteExpectedStateChange(deviceId, channelIdx, state, attribution) {
-  pending.set(key(deviceId, channelIdx, state), {
-    ...attribution,
-    expiresAt: Date.now() + TTL_MS,
-  });
+  const k = key(deviceId, channelIdx, state);
+  const entry = { ...attribution, expiresAt: Date.now() + TTL_MS };
+  if (!pending.has(k)) {
+    pending.set(k, []);
+  }
+  pending.get(k).push(entry);
 }
 
-/** Consumes (removes) and returns the attribution, or null if none/expired. */
+/** Consumes (shifts off) and returns the OLDEST still-non-expired queued
+ * attribution for this key, or null if none/expired. Any expired entries
+ * ahead of it in the queue are discarded along the way. */
 export function takeAttribution(deviceId, channelIdx, state) {
   const k = key(deviceId, channelIdx, state);
-  const entry = pending.get(k);
-  if (!entry) {
+  const queue = pending.get(k);
+  if (!queue) {
     return null;
   }
-  pending.delete(k);
-  return entry.expiresAt >= Date.now() ? entry : null;
+  let result = null;
+  while (queue.length > 0) {
+    const entry = queue.shift();
+    if (entry.expiresAt >= Date.now()) {
+      result = entry;
+      break;
+    }
+  }
+  if (queue.length === 0) {
+    pending.delete(k);
+  }
+  return result;
 }

@@ -70,8 +70,9 @@ class StateTrigger extends AutomationTrigger {
   };
 }
 
-/// One action an [Automation] performs — embedded directly (not a Scene
-/// reference; Scenes are still Hive-only/unsynced, see docs/plan.md).
+/// One action an [Automation] performs — embedded directly as a raw
+/// {deviceId, channelIdx, state} triple, not a reference to any other
+/// entity.
 class AutomationAction {
   const AutomationAction({
     required this.deviceId,

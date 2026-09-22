@@ -13,6 +13,10 @@ class DeviceConfig {
     required this.switches,
     required this.schedules,
     this.utcOffsetMinutes = 0,
+    this.interlockEnabled = false,
+    this.latitude = 0.0,
+    this.longitude = 0.0,
+    this.locationSet = false,
   });
 
   final String deviceId;
@@ -26,6 +30,19 @@ class DeviceConfig {
 
   /// Local-minus-UTC, in minutes — see `DeviceApiClient.setTimezone`.
   final int utcOffsetMinutes;
+
+  /// If true, turning any channel ON forces every other channel OFF
+  /// (curtain/blind-module-style interlock) — see `DeviceApiClient.setDeviceSettings`.
+  final bool interlockEnabled;
+
+  /// Degrees, east-positive longitude. Only meaningful when [locationSet].
+  final double latitude;
+  final double longitude;
+
+  /// False until latitude/longitude have been explicitly set — gates
+  /// whether sunrise/sunset schedules can be created (the device rejects
+  /// them with an error otherwise).
+  final bool locationSet;
 
   factory DeviceConfig.fromJson(Map<String, dynamic> json) => DeviceConfig(
     deviceId: json['device_id'] as String,
@@ -41,6 +58,10 @@ class DeviceConfig {
         .map((e) => Schedule.fromJson(e as Map<String, dynamic>))
         .toList(),
     utcOffsetMinutes: json['utc_offset_min'] as int? ?? 0,
+    interlockEnabled: json['interlock_enabled'] as bool? ?? false,
+    latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
+    longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
+    locationSet: json['location_set'] as bool? ?? false,
   );
 
   Map<String, dynamic> toJson() => {
@@ -53,5 +74,9 @@ class DeviceConfig {
     'switches': switches.map((s) => s.toJson()).toList(),
     'schedules': schedules.map((s) => s.toJson()).toList(),
     'utc_offset_min': utcOffsetMinutes,
+    'interlock_enabled': interlockEnabled,
+    'latitude': latitude,
+    'longitude': longitude,
+    'location_set': locationSet,
   };
 }

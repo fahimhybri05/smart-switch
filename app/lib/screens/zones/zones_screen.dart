@@ -114,13 +114,13 @@ class _ZoneSection extends ConsumerWidget {
                     width: 38,
                     height: 38,
                     decoration: BoxDecoration(
-                      color: colorScheme.secondaryContainer,
+                      color: colorScheme.primaryContainer,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
                       _roomIcon(zone.name),
-                      size: 20,
-                      color: colorScheme.onSecondaryContainer,
+                      size: 19,
+                      color: colorScheme.onPrimaryContainer,
                     ),
                   ),
                   const SizedBox(width: Spacing.sm),
@@ -130,7 +130,11 @@ class _ZoneSection extends ConsumerWidget {
                       children: [
                         Text(
                           zone.name,
-                          style: Theme.of(context).textTheme.titleMedium,
+                          style: Theme.of(
+                            context,
+                          ).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                         Text(
                           '${members.length} ${members.length == 1 ? 'device' : 'devices'}',
@@ -140,15 +144,19 @@ class _ZoneSection extends ConsumerWidget {
                       ],
                     ),
                   ),
-                  IconButton(
+                  _PanelIconButton(
                     tooltip: 'Turn room on',
-                    onPressed: () => _toggleRoom(ref, members, true),
-                    icon: const Icon(Icons.light_mode_outlined),
+                    onPressed: () => _toggleRoom(context, ref, members, true),
+                    icon: Icons.flash_on_rounded,
+                    accent: true,
                   ),
-                  IconButton(
+                  const SizedBox(width: Spacing.xs),
+                  _PanelIconButton(
                     tooltip: 'Turn room off',
-                    onPressed: () => _toggleRoom(ref, members, false),
-                    icon: const Icon(Icons.dark_mode_outlined),
+                    onPressed: () =>
+                        _toggleRoom(context, ref, members, false),
+                    icon: Icons.power_settings_new_rounded,
+                    accent: false,
                   ),
                 ],
               ),
@@ -197,6 +205,7 @@ class _ZoneSection extends ConsumerWidget {
   }
 
   Future<void> _toggleRoom(
+    BuildContext context,
     WidgetRef ref,
     List<({KnownDevice device, dynamic config})> members,
     bool on,
@@ -204,6 +213,7 @@ class _ZoneSection extends ConsumerWidget {
     HapticFeedback.mediumImpact();
     final desired = on ? ChannelPowerState.on : ChannelPowerState.off;
     final overrides = ref.read(channelOverrideProvider.notifier);
+    var failureCount = 0;
     await Future.wait(
       members.map((member) async {
         overrides.set(
@@ -215,11 +225,65 @@ class _ZoneSection extends ConsumerWidget {
           await ref
               .read(activeDeviceApiClientProvider(member.device))
               .setChannelState(member.config.channelIdx, desired);
-        } catch (_) {}
+        } catch (_) {
+          failureCount++;
+        }
       }),
     );
     for (final member in members) {
       ref.invalidate(channelStatesProvider(member.device));
     }
+
+    if (failureCount > 0 && context.mounted) {
+      final total = members.length;
+      final succeeded = total - failureCount;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '$succeeded of $total switches updated — $failureCount failed',
+          ),
+        ),
+      );
+    }
+  }
+}
+
+/// Small square icon-button chrome for the per-room on/off controls — a soft
+/// tonal fill rather than a bare Material [IconButton], with the primary
+/// container reserved for the energizing (on) action so it reads as the
+/// stronger affordance. The 48x48dp minimum size is a fixed accessible tap
+/// target — keep it even though the icon itself is smaller.
+class _PanelIconButton extends StatelessWidget {
+  const _PanelIconButton({
+    required this.tooltip,
+    required this.onPressed,
+    required this.icon,
+    required this.accent,
+  });
+
+  final String tooltip;
+  final VoidCallback onPressed;
+  final IconData icon;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 19),
+      style: IconButton.styleFrom(
+        foregroundColor: accent
+            ? colorScheme.onPrimaryContainer
+            : colorScheme.onSurfaceVariant,
+        backgroundColor: accent
+            ? colorScheme.primaryContainer
+            : colorScheme.surfaceContainerHigh,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        minimumSize: const Size(48, 48),
+        padding: EdgeInsets.zero,
+      ),
+    );
   }
 }

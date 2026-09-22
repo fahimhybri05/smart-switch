@@ -42,7 +42,7 @@ class SkeletonBox extends StatelessWidget {
       width: width,
       height: height,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(borderRadius),
       ),
     );
@@ -112,7 +112,7 @@ class SkeletonGridPlaceholder extends StatelessWidget {
         itemCount: tileCount,
         itemBuilder: (context, i) => Container(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(28),
           ),
         ),
