@@ -1,5 +1,6 @@
 import { pool } from '../db/pool.js';
 import { relayCommand } from '../ws/registry.js';
+import { DEFAULT_CHANNEL_COUNT } from './constants.js';
 
 /**
  * Served straight from `cached_channel_state` — no device round-trip, per
@@ -9,8 +10,10 @@ import { relayCommand } from '../ws/registry.js';
  */
 export async function getChannels(deviceId) {
   const { rows } = await pool.query(
-    'SELECT channel_idx, state FROM cached_channel_state WHERE device_id = $1 ORDER BY channel_idx',
-    [deviceId],
+    // Bounded to the board's physical channels so a stale cached row from an
+    // older board config (e.g. a 7th channel) doesn't show up as a switch.
+    'SELECT channel_idx, state FROM cached_channel_state WHERE device_id = $1 AND channel_idx < $2 ORDER BY channel_idx',
+    [deviceId, DEFAULT_CHANNEL_COUNT],
   );
   return { status: 200, body: rows };
 }
