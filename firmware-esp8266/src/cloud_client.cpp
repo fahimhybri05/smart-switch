@@ -200,6 +200,7 @@ static void handleBackendRequest(const char *reqId, const char *method, const ch
 // caches locally (see config_store.h) — required for the instant/offline
 // physical-input exception to work correctly.
 static void handleHwConfigPush(JsonDocument &doc) {
+  Serial.println("cloud: hw config received");
   // The push is the complete picture: a channel it omits (e.g. its switch
   // was deleted server-side) goes back to DISABLED rather than keeping a
   // stale input mode.
@@ -282,16 +283,24 @@ static void handleIncomingFrame(uint8_t *payload, size_t length) {
 static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
+      Serial.printf("cloud: connected to %s:%d%s\n", SS_CLOUD_WS_HOST, SS_CLOUD_WS_PORT,
+                    SS_CLOUD_WS_PATH);
       s_connected = true;
       s_consecutiveFailures = 0;
       sendAuthFrame();
       publishFullState();
       break;
-    case WStype_DISCONNECTED:
+    case WStype_DISCONNECTED: {
+      // arduinoWebSockets doesn't surface the server's close code here, so
+      // an auth rejection (4003) looks the same as a network drop.
       s_connected = false;
       s_consecutiveFailures++;
-      s_ws.setReconnectInterval(computeReconnectIntervalMs());
+      uint32_t retryMs = computeReconnectIntervalMs();
+      s_ws.setReconnectInterval(retryMs);
+      Serial.printf("cloud: disconnected/unreachable (%s:%d), retry in %lus\n", SS_CLOUD_WS_HOST,
+                    SS_CLOUD_WS_PORT, (unsigned long)(retryMs / 1000));
       break;
+    }
     case WStype_TEXT:
       handleIncomingFrame(payload, length);
       break;

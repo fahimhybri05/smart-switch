@@ -11,6 +11,15 @@ import { householdsRouter } from './routes/households.js';
 export function createApp() {
   const app = express();
 
+  // Behind a reverse proxy, req.ip (and so the auth rate limiter's per-IP
+  // bucket) must come from X-Forwarded-For. Opt-in: trusting it when the
+  // server is reachable directly would let clients spoof their IP.
+  // TRUST_PROXY = number of proxy hops (e.g. 1 for a single nginx).
+  if (process.env.TRUST_PROXY) {
+    const hops = Number(process.env.TRUST_PROXY);
+    app.set('trust proxy', Number.isInteger(hops) ? hops : process.env.TRUST_PROXY);
+  }
+
   // Clients (Flutter web, React dashboard) are served from a different
   // origin/port than this API, and can run from anywhere — no cookies are
   // involved (auth is a Bearer token / WS query param), so a wildcard

@@ -84,6 +84,7 @@ void wifiProvisioningBegin() {
   if (WiFi.SSID().length() > 0) {
     WiFi.mode(WIFI_STA);
     applyStaticIpIfConfigured();
+    Serial.printf("wifi: connecting to \"%s\"...\n", WiFi.SSID().c_str());
     WiFi.begin();
     // Intentionally blocking: this runs before any other subsystem starts
     // (httpApiBegin/cloudClientBegin/recoveryButtonBegin are all still
@@ -101,8 +102,12 @@ void wifiProvisioningBegin() {
     }
     if (WiFi.status() == WL_CONNECTED) {
       s_state = WifiReconfigState::Connected;
+      Serial.printf("wifi: connected to \"%s\" ip=%s rssi=%ddBm\n", WiFi.SSID().c_str(),
+                    WiFi.localIP().toString().c_str(), WiFi.RSSI());
       return;
     }
+    Serial.printf("wifi: could not connect to \"%s\" within 20s (status=%d)\n",
+                  WiFi.SSID().c_str(), (int)WiFi.status());
     // Couldn't reconnect to the stored network (moved router, changed
     // password) — fall through to opening the SoftAP so the user can fix
     // it without needing a factory reset.
@@ -114,6 +119,8 @@ void wifiProvisioningBegin() {
   // SoftAP itself is WPA2-protected using device_id as the password, the
   // same physically-visible identity already used as the pairing secret.
   WiFi.softAP(apName.c_str(), configStore.cfg().device_id);
+  Serial.printf("wifi: setup hotspot \"%s\" up at %s (password: device id)\n", apName.c_str(),
+                WiFi.softAPIP().toString().c_str());
   // Start the periodic auto-retry clock now (Fix 2) — if stored credentials
   // exist, wifiProvisioningLoop() will start trying them again in the
   // background after AP_RETRY_INTERVAL_MS. Harmless to set even when no
@@ -127,6 +134,7 @@ void wifiProvisioningLoop() {
     s_deferArmed = false;
     WiFi.mode(WIFI_AP_STA); // keep the AP alive in case the new creds fail
     WiFi.begin(s_pendingSsid.c_str(), s_pendingPassword.c_str());
+    Serial.printf("wifi: testing new network \"%s\"...\n", s_pendingSsid.c_str());
     s_connectAttemptStart = millis();
     s_state = WifiReconfigState::Testing;
   }
@@ -134,9 +142,12 @@ void wifiProvisioningLoop() {
   if (s_state == WifiReconfigState::Testing) {
     if (WiFi.status() == WL_CONNECTED) {
       s_state = WifiReconfigState::Connected;
+      Serial.printf("wifi: connected to \"%s\" ip=%s rssi=%ddBm (hotspot off)\n",
+                    WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
       WiFi.mode(WIFI_STA); // provisioning succeeded, drop the AP
       WiFi.setSleepMode(WIFI_NONE_SLEEP); // re-assert — see wifiProvisioningBegin()
     } else if (millis() - s_connectAttemptStart > CONNECT_TIMEOUT_MS) {
+      Serial.printf("wifi: new network \"%s\" failed, rolling back\n", s_pendingSsid.c_str());
       if (s_previousSsid.length() > 0) {
         WiFi.begin(s_previousSsid.c_str(), s_previousPassword.c_str());
       }
@@ -156,12 +167,15 @@ void wifiProvisioningLoop() {
     s_lastApRetryMs = millis();
     WiFi.mode(WIFI_AP_STA); // keep the AP alive in case the stored creds still don't work
     WiFi.begin(); // reuse the SDK-persisted STA credentials, same ones tried at boot
+    Serial.printf("wifi: retrying \"%s\" in background...\n", WiFi.SSID().c_str());
     s_apRetryConnectStart = millis();
     s_apRetryState = ApRetryState::Testing;
   } else if (s_apRetryState == ApRetryState::Testing) {
     if (WiFi.status() == WL_CONNECTED) {
       s_apRetryState = ApRetryState::Idle;
       s_state = WifiReconfigState::Connected;
+      Serial.printf("wifi: connected to \"%s\" ip=%s rssi=%ddBm (hotspot off)\n",
+                    WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
       WiFi.mode(WIFI_STA); // router's back — drop the AP
       WiFi.setSleepMode(WIFI_NONE_SLEEP); // re-assert — see wifiProvisioningBegin()
     } else if (millis() - s_apRetryConnectStart > CONNECT_TIMEOUT_MS) {
@@ -174,6 +188,18 @@ void wifiProvisioningLoop() {
       if (s_state != WifiReconfigState::Testing) {
         WiFi.mode(WIFI_AP); // still unreachable — back to pure AP, try again next interval
       }
+    }
+  }
+  // Log link drops/recoveries after the initial connect (auto-reconnect is
+  // handled by the SDK, this just makes it visible on serial).
+  static bool s_wasConnected = false;
+  bool connected = WiFi.status() == WL_CONNECTED;
+  if (connected != s_wasConnected) {
+    s_wasConnected = connected;
+    if (connected) {
+      Serial.printf("wifi: link up ip=%s\n", WiFi.localIP().toString().c_str());
+    } else {
+      Serial.println("wifi: link down");
     }
   }
 }
