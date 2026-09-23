@@ -136,7 +136,12 @@ export function handleDeviceConnection(ws) {
           authenticated = true;
           ws.isAlive = true;
           registerDevice(deviceId, ws);
-          console.log(`device connected: ${deviceId}`);
+          // Firmware diagnostics (optional fields; older firmware omits them).
+          const diag = ['fw', 'resetReason', 'uptimeS', 'freeHeap', 'rssi']
+            .filter((k) => msg[k] !== undefined)
+            .map((k) => `${k}=${JSON.stringify(msg[k])}`)
+            .join(' ');
+          console.log(`device connected: ${deviceId}${diag ? ` (${diag})` : ''}`);
           if (result.householdId) {
             broadcastToHousehold(result.householdId, { event: 'device_online', deviceId });
           }

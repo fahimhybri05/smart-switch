@@ -70,6 +70,7 @@ void setup() {
   cloudClientBegin();
   recoveryButtonBegin();
 
+  Serial.printf("reset reason: %s\n", ESP.getResetReason().c_str());
   Serial.printf("boot complete: device_id=%s board_type=%s channel_count=%d fw_version=%s\n",
                 configStore.cfg().device_id, configStore.cfg().board_type,
                 relayHalChannelCount(), configStore.cfg().fw_version);

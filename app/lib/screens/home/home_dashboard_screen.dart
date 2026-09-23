@@ -163,10 +163,11 @@ class HomeDashboardScreen extends ConsumerWidget {
               sliver: SliverToBoxAdapter(
                 child: _LiveOnCount(
                   deviceConfigs: deviceConfigs,
-                  builder: (context, onCount) => _OverviewHero(
+                  builder: (context, onKeys) => _OverviewHero(
+                    dateLabel: _dateLabel,
                     onlineDevices: onlineDevices,
                     offlineDevices: offlineDevices,
-                    onCount: onCount,
+                    onCount: onKeys.length,
                     totalSwitches: totalSwitches,
                   ),
                 ),
@@ -178,79 +179,31 @@ class HomeDashboardScreen extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            _dateLabel,
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(color: colorScheme.onSurfaceVariant),
-                          ),
-                        ),
-                        _StatusPill(
-                          icon: offlineDevices == 0
-                              ? Icons.bolt_rounded
-                              : Icons.warning_amber_rounded,
-                          label: offlineDevices == 0
-                              ? '$onlineDevices online'
-                              : '$offlineDevices offline',
-                          color: offlineDevices == 0
-                              ? colorScheme.tertiary
-                              : colorScheme.error,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: Spacing.md),
-                    _LiveOnCount(
-                      deviceConfigs: deviceConfigs,
-                      builder: (context, onCount) => Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            totalSwitches == 0
-                                ? '${devices.length} device(s) connected'
-                                : '$onCount of $totalSwitches switches on',
-                            style: Theme.of(context).textTheme.bodyLarge
-                                ?.copyWith(color: colorScheme.onSurfaceVariant),
-                          ),
-                          if (totalSwitches > 0) ...[
-                            const SizedBox(height: Spacing.xs),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: TweenAnimationBuilder<double>(
-                                duration: Motion.slow,
-                                tween: Tween(
-                                  begin: 0,
-                                  end: onCount / totalSwitches,
-                                ),
-                                builder: (context, value, _) =>
-                                    LinearProgressIndicator(
-                                      value: value,
-                                      minHeight: 6,
-                                      backgroundColor:
-                                          colorScheme.surfaceContainerHighest,
-                                    ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
                     if (zones.isNotEmpty) ...[
                       const SizedBox(height: Spacing.lg),
                       const _SectionLabel('Rooms'),
                       const SizedBox(height: Spacing.sm),
-                      SizedBox(
-                        height: 72,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: zones.length,
-                          separatorBuilder: (_, _) =>
-                              const SizedBox(width: Spacing.sm),
-                          itemBuilder: (context, i) => _ZoneChip(
-                            name: zones[i].name,
-                            count: zones[i].switches.length,
-                            onTap: () => onNavigateToTab(1),
+                      _LiveOnCount(
+                        deviceConfigs: deviceConfigs,
+                        builder: (context, onKeys) => SizedBox(
+                          height: 96,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: zones.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(width: Spacing.sm),
+                            itemBuilder: (context, i) => _RoomCard(
+                              name: zones[i].name,
+                              total: zones[i].switches.length,
+                              onCount: zones[i].switches
+                                  .where(
+                                    (z) => onKeys.contains(
+                                      _onKey(z.deviceId, z.switchConfig.channelIdx),
+                                    ),
+                                  )
+                                  .length,
+                              onTap: () => onNavigateToTab(1),
+                            ),
                           ),
                         ),
                       ),
@@ -457,46 +410,6 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-class _StatusPill extends StatelessWidget {
-  const _StatusPill({
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: colorScheme.onSurface,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// Isolates the per-poll-tick rebuild caused by [channelStatesProvider] to
 /// just this small subtree, instead of the whole dashboard screen.
 ///
@@ -513,29 +426,39 @@ class _LiveOnCount extends ConsumerWidget {
   const _LiveOnCount({required this.deviceConfigs, required this.builder});
 
   final List<(KnownDevice, DeviceConfig)> deviceConfigs;
-  final Widget Function(BuildContext context, int onCount) builder;
+
+  /// Gets the "deviceId:channelIdx" keys of every switch currently ON.
+  final Widget Function(BuildContext context, Set<String> onKeys) builder;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    var onCount = 0;
+    final onKeys = <String>{};
     for (final (device, _) in deviceConfigs) {
       final channelsAsync = ref.watch(channelStatesProvider(device));
       channelsAsync.whenData((states) {
-        onCount += states.where((s) => s.state == ChannelPowerState.on).length;
+        for (final s in states) {
+          if (s.state == ChannelPowerState.on) {
+            onKeys.add(_onKey(device.deviceId, s.channelIdx));
+          }
+        }
       });
     }
-    return builder(context, onCount);
+    return builder(context, onKeys);
   }
 }
 
+String _onKey(String deviceId, int channelIdx) => '$deviceId:$channelIdx';
+
 class _OverviewHero extends StatelessWidget {
   const _OverviewHero({
+    required this.dateLabel,
     required this.onlineDevices,
     required this.offlineDevices,
     required this.onCount,
     required this.totalSwitches,
   });
 
+  final String dateLabel;
   final int onlineDevices;
   final int offlineDevices;
   final int onCount;
@@ -545,6 +468,7 @@ class _OverviewHero extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final panelColors = context.panelColors;
+    final onInk = colorScheme.onPrimary;
     final needsAttention = offlineDevices > 0;
     final activeLabel = totalSwitches == 0
         ? 'No switches yet'
@@ -578,6 +502,13 @@ class _OverviewHero extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Text(
+                        dateLabel,
+                        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                          color: onInk.withValues(alpha: 0.72),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
                       Text(
                         needsAttention
                             ? 'A little attention needed'
@@ -643,6 +574,36 @@ class _OverviewHero extends StatelessWidget {
                 ),
               ],
             ),
+            if (totalSwitches > 0) ...[
+              const SizedBox(height: Spacing.md),
+              Row(
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: TweenAnimationBuilder<double>(
+                        duration: Motion.slow,
+                        tween: Tween(begin: 0, end: onCount / totalSwitches),
+                        builder: (context, value, _) => LinearProgressIndicator(
+                          value: value,
+                          minHeight: 6,
+                          color: onInk,
+                          backgroundColor: onInk.withValues(alpha: 0.22),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: Spacing.sm),
+                  Text(
+                    '$onCount/$totalSwitches on',
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: onInk,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -684,60 +645,72 @@ class _HeroMetric extends StatelessWidget {
   }
 }
 
-class _ZoneChip extends StatelessWidget {
-  const _ZoneChip({
+class _RoomCard extends StatelessWidget {
+  const _RoomCard({
     required this.name,
-    required this.count,
+    required this.total,
+    required this.onCount,
     required this.onTap,
   });
 
   final String name;
-  final int count;
+  final int total;
+  final int onCount;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    return Material(
-      color: colorScheme.surfaceContainerHigh,
-      borderRadius: BorderRadius.circular(16),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: Spacing.md,
-            vertical: Spacing.sm,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.meeting_room_outlined,
-                size: 18,
-                color: colorScheme.primary,
-              ),
-              const SizedBox(width: Spacing.sm),
-              Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: colorScheme.onSurface,
-                      fontWeight: FontWeight.w700,
+    final active = onCount > 0;
+    return SizedBox(
+      width: 140,
+      child: Material(
+        color: active
+            ? colorScheme.primaryContainer
+            : colorScheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(Spacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Icon(
+                  active ? Icons.meeting_room_rounded : Icons.meeting_room_outlined,
+                  size: 22,
+                  color: active
+                      ? colorScheme.onPrimaryContainer
+                      : colorScheme.onSurfaceVariant,
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: active
+                            ? colorScheme.onPrimaryContainer
+                            : colorScheme.onSurface,
+                      ),
                     ),
-                  ),
-                  Text(
-                    '$count switch(es)',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
+                    Text(
+                      onCount == 0 ? 'All off' : '$onCount of $total on',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: active
+                            ? colorScheme.onPrimaryContainer.withValues(alpha: 0.8)
+                            : colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),

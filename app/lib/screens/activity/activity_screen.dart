@@ -85,6 +85,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     'group' => Icons.workspaces_outlined,
     'scene' => Icons.auto_awesome_outlined,
     'device' => Icons.schedule_outlined,
+    'voice' => Icons.mic_none_outlined,
     _ => Icons.touch_app_outlined,
   };
 
@@ -94,6 +95,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     'group' => 'Group',
     'scene' => 'Scene',
     'device' => 'Device schedule',
+    'voice' => 'Google Assistant',
     _ => entry.actorEmail ?? 'App',
   };
 

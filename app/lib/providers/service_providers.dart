@@ -16,6 +16,8 @@ import '../models/local/known_device.dart';
 import '../models/local/switch_group.dart';
 import '../services/app_settings_service.dart';
 import '../services/backend/auth_session_service.dart';
+import '../services/backend/backend_api_exception.dart';
+import '../services/backend/credential_store.dart';
 import '../services/backend/backend_auth_client.dart';
 import '../services/backend/backend_devices_client.dart';
 import '../services/backend/backend_groups_client.dart';
@@ -133,6 +135,7 @@ class AuthNotifier extends Notifier<AuthState> {
   }) async {
     _rememberMe = rememberMe;
     final tokens = await _client().login(email, password);
+    await _rememberCredentials(email, password);
     await _persist(email, tokens);
   }
 
@@ -143,8 +146,12 @@ class AuthNotifier extends Notifier<AuthState> {
   }) async {
     _rememberMe = rememberMe;
     final tokens = await _client().signup(email, password);
+    await _rememberCredentials(email, password);
     await _persist(email, tokens);
   }
+
+  Future<void> _rememberCredentials(String email, String password) =>
+      _rememberMe ? CredentialStore.save(email, password) : CredentialStore.clear();
 
   Future<void> _persist(String email, TokenPair tokens) async {
     if (_rememberMe) {
@@ -216,24 +223,53 @@ class AuthNotifier extends Notifier<AuthState> {
     if (current == null) {
       throw StateError('not logged in');
     }
+    TokenPair tokens;
     try {
-      final tokens = await _client().refresh(current.refreshToken);
-      if (_rememberMe) {
-        await _session.updateTokens(
-          accessToken: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-        );
+      tokens = await _client().refresh(current.refreshToken);
+    } on BackendApiException catch (e) {
+      // Only a definite rejection of the refresh token ends the session —
+      // e.g. a widget/background isolate rotated it first. Anything else
+      // (5xx, proxy/tunnel outage) keeps the user signed in.
+      if (e.statusCode != 401 && e.statusCode != 400) rethrow;
+      final relogged = await _silentRelogin(current.email);
+      if (relogged == null) {
+        ref.read(sessionExpiredMessageProvider.notifier).state =
+            'Your session expired. Please sign in again.';
+        await logout();
+        rethrow;
       }
-      state = (
-        email: current.email,
+      tokens = relogged;
+    }
+    // Network errors/timeouts from refresh() propagate as-is: no logout.
+    if (_rememberMe) {
+      await _session.updateTokens(
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
       );
-      return tokens.accessToken;
-    } catch (_) {
-      ref.read(sessionExpiredMessageProvider.notifier).state =
-          'Your session expired. Please sign in again.';
-      await logout();
+    }
+    state = (
+      email: current.email,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    );
+    return tokens.accessToken;
+  }
+
+  /// Signs back in with the "Remember me" credentials, or null if none are
+  /// saved for this account or they were rejected. Network errors propagate
+  /// (the caller keeps the session rather than logging out).
+  Future<TokenPair?> _silentRelogin(String email) async {
+    final creds = await CredentialStore.read();
+    if (creds == null || creds.email != email) {
+      return null;
+    }
+    try {
+      return await _client().login(creds.email, creds.password);
+    } on BackendApiException catch (e) {
+      if (e.statusCode == 401 || e.statusCode == 400) {
+        await CredentialStore.clear(); // password changed elsewhere
+        return null;
+      }
       rethrow;
     }
   }
@@ -504,9 +540,13 @@ final deviceSyncStatusProvider =
 /// `Ref` via this provider's own build callback.
 final startupDeviceSyncProvider = Provider<void>((ref) {
   if (ref.read(authProvider) != null) {
-    unawaited(syncClaimedDevicesFromBackend(ref));
-    unawaited(ref.read(householdsProvider.notifier).refresh());
-    unawaited(ref.read(householdInvitesProvider.notifier).refresh());
+    // Deferred a microtask: these update other providers' state, which
+    // Riverpod forbids while this provider is still building.
+    Future.microtask(() {
+      unawaited(syncClaimedDevicesFromBackend(ref));
+      unawaited(ref.read(householdsProvider.notifier).refresh());
+      unawaited(ref.read(householdInvitesProvider.notifier).refresh());
+    });
   }
 });
 

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_surface">#131417</color>
+    <color name="widget_tile_off">#1E2024</color>
+    <color name="widget_tile_on">#A8C7FA</color>
+    <color name="widget_circle_off">#2A2D32</color>
+    <color name="widget_circle_on">#26062E6F</color>
+    <color name="widget_text">#E3E3E6</color>
+    <color name="widget_text_muted">#9AA0A6</color>
+    <color name="widget_text_on">#062E6F</color>
+    <color name="widget_icon_off">#C4C7C5</color>
+    <color name="widget_icon_on">#062E6F</color>
+</resources>

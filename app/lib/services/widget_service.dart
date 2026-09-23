@@ -13,8 +13,16 @@ const _pinnedBoxName = 'pinned_switches';
 // Shared with background_monitor_service.dart's per-device state cache —
 // deliberately reused rather than a third Hive box (see docs/plan.md).
 const _lastStatesBoxName = 'last_states';
-const _androidWidgetName = 'SmartSwitchWidgetProvider';
-const maxPinnedSwitches = 4;
+// Both home-screen widgets render from the same pinned_switches data.
+const _androidWidgetNames = ['SmartSwitchWidgetProvider', 'SingleSwitchWidgetProvider'];
+
+Future<void> _updateAllWidgets() async {
+  for (final name in _androidWidgetNames) {
+    await HomeWidget.updateWidget(androidName: name);
+  }
+}
+// The grid widget shows the first 4; the rest are for single-switch widgets.
+const maxPinnedSwitches = 8;
 
 bool get _widgetSupported =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -81,7 +89,7 @@ Future<void> refreshWidgetStorage() async {
   final pinned = await getPinnedSwitches();
   if (pinned.isEmpty) {
     await HomeWidget.saveWidgetData<String>('pinned_switches', jsonEncode([]));
-    await HomeWidget.updateWidget(androidName: _androidWidgetName);
+    await _updateAllWidgets();
     return;
   }
 
@@ -92,11 +100,28 @@ Future<void> refreshWidgetStorage() async {
 
   final lastStatesBox = await Hive.openBox(_lastStatesBoxName);
   final entries = <Map<String, dynamic>>[];
+  // One live fetch per device (not per pinned switch), so a toggle made in
+  // the app or by a schedule shows up here instead of the monitor's cache.
+  final liveByDevice = <String, List<ChannelState>?>{};
   try {
     for (final p in pinned) {
+      if (!liveByDevice.containsKey(p.deviceId)) {
+        final live = await viaLocalOrCloud(
+          deviceId: p.deviceId,
+          lastKnownIp: p.lastKnownIp,
+          backendUrl: backendUrl,
+          call: (client) => client.getChannels(),
+        );
+        liveByDevice[p.deviceId] = live;
+        if (live != null) {
+          await _cacheStates(lastStatesBox, p.deviceId, {
+            for (final c in live) c.channelIdx: c.state.toJson(),
+          });
+        }
+      }
       entries.add({
         ...p.toJson(),
-        'state': await _resolveState(p, lastStatesBox, backendUrl),
+        'state': _resolveState(p, liveByDevice[p.deviceId], lastStatesBox),
       });
     }
   } finally {
@@ -107,62 +132,70 @@ Future<void> refreshWidgetStorage() async {
     'pinned_switches',
     jsonEncode(entries),
   );
-  await HomeWidget.updateWidget(androidName: _androidWidgetName);
+  await _updateAllWidgets();
 }
 
-Future<String> _resolveState(
+String _resolveState(
   PinnedSwitch p,
+  List<ChannelState>? live,
   Box lastStatesBox,
-  String? backendUrl,
-) async {
+) {
+  if (live != null) {
+    for (final c in live) {
+      if (c.channelIdx == p.channelIdx) return c.state.toJson();
+    }
+  }
   final cached = lastStatesBox.get(p.deviceId) as Map?;
-  final cachedStates = (cached?['states'] as List?)?.cast<Map>();
-  String? cachedState;
-  if (cachedStates != null) {
-    for (final s in cachedStates) {
-      if (s['channel_idx'] == p.channelIdx) {
-        cachedState = s['state'] as String;
-      }
-    }
+  for (final s in (cached?['states'] as List?)?.cast<Map>() ?? const <Map>[]) {
+    if (s['channel_idx'] == p.channelIdx) return s['state'] as String;
   }
-  if (cachedState != null) {
-    return cachedState;
-  }
-
-  final channels = await viaLocalOrCloud(
-    deviceId: p.deviceId,
-    lastKnownIp: p.lastKnownIp,
-    backendUrl: backendUrl,
-    call: (client) => client.getChannels(),
-  );
-  if (channels != null) {
-    for (final c in channels) {
-      if (c.channelIdx == p.channelIdx) {
-        return c.state.toJson();
-      }
-    }
-  }
-  // Neither the cache nor a live fetch (local or cloud) had an answer —
-  // show OFF only as the very first-ever render's default, never as a
-  // silent overwrite of a state we actually knew a moment ago.
+  // Neither a live fetch nor the cache had an answer — OFF only as the very
+  // first-ever render's default.
   return 'OFF';
+}
+
+/// Merges [states] (channel_idx -> "ON"/"OFF") into the shared
+/// `last_states` cache the background monitor also reads, so its next run
+/// doesn't report the widget's own toggle as an external change.
+Future<void> _cacheStates(Box box, String deviceId, Map<int, String> states) async {
+  final prev = box.get(deviceId) as Map?;
+  final merged = <int, String>{
+    for (final s in (prev?['states'] as List?)?.cast<Map>() ?? const <Map>[])
+      s['channel_idx'] as int: s['state'] as String,
+    ...states,
+  };
+  await box.put(deviceId, {
+    'reachable': true,
+    'states': [
+      for (final e in merged.entries) {'channel_idx': e.key, 'state': e.value},
+    ],
+  });
 }
 
 /// Runs on tap from the widget — a headless isolate with no access to the
 /// running app's ProviderContainer, so it talks to the device directly.
+// Taps that land in the same background isolate share Hive box instances;
+// running them one at a time stops one tap closing a box another is using.
+Future<void> _tapQueue = Future.value();
+
 @pragma('vm:entry-point')
-Future<void> widgetInteractionCallback(Uri? uri) async {
+Future<void> widgetInteractionCallback(Uri? uri) {
+  final next = _tapQueue.then((_) => _handleWidgetTap(uri));
+  _tapQueue = next.catchError((_) {});
+  return next;
+}
+
+Future<void> _handleWidgetTap(Uri? uri) async {
   if (uri == null || uri.host != 'toggle') {
     return;
   }
 
   final deviceId = uri.queryParameters['device_id'];
-  final ip = uri.queryParameters['ip'];
+  // The Android widget sends an empty ip for a cloud-only device.
+  final rawIp = uri.queryParameters['ip'];
+  final ip = (rawIp == null || rawIp.isEmpty) ? null : rawIp;
   final channelIdx = int.tryParse(uri.queryParameters['channel_idx'] ?? '');
   final currentState = uri.queryParameters['current_state'];
-  // ip is now optional — a claimed device this phone hasn't seen on the
-  // LAN (or currently can't reach it) can still be toggled via the cloud
-  // relay below. See docs/plan.md's cloud-aware widget relay section.
   if (deviceId == null || channelIdx == null) {
     return;
   }
@@ -171,23 +204,63 @@ Future<void> widgetInteractionCallback(Uri? uri) async {
       ? ChannelPowerState.off
       : ChannelPowerState.on;
 
-  final settings = AppSettingsService();
-  await settings.init();
-  final backendUrl = settings.getBackendUrl();
-  await settings.close();
+  // Flip the tile right away so the tap feels instant; reverted below if
+  // the command doesn't go through.
+  await _setWidgetTileState(deviceId, channelIdx, newState.toJson());
 
-  final result = await viaLocalOrCloud(
-    deviceId: deviceId,
-    lastKnownIp: ip,
-    backendUrl: backendUrl,
-    call: (client) async {
-      await client.setChannelState(channelIdx, newState);
-      return true;
-    },
-  );
-  if (result == null) {
-    return; // leave the widget showing its last known state
+  try {
+    // This runs in a fresh headless isolate: main.dart's Hive.initFlutter()
+    // never ran here, and every box open below would throw without it.
+    await Hive.initFlutter();
+
+    final settings = AppSettingsService();
+    await settings.init();
+    final backendUrl = settings.getBackendUrl();
+    await settings.close();
+
+    final result = await viaLocalOrCloud(
+      deviceId: deviceId,
+      lastKnownIp: ip,
+      backendUrl: backendUrl,
+      call: (client) async {
+        await client.setChannelState(channelIdx, newState);
+        return true;
+      },
+    );
+    if (result == null) {
+      debugPrint('widget toggle failed: $deviceId ch$channelIdx unreachable (local+cloud)');
+      await _setWidgetTileState(deviceId, channelIdx, currentState ?? 'OFF');
+      return;
+    }
+
+    // Record the new state so the redraw (and the next tap's current_state)
+    // reflect it even if the live re-fetch below fails.
+    final box = await Hive.openBox(_lastStatesBoxName);
+    try {
+      await _cacheStates(box, deviceId, {channelIdx: newState.toJson()});
+    } finally {
+      await box.close();
+    }
+    await refreshWidgetStorage();
+  } catch (e, st) {
+    debugPrint('widget toggle error: $e\n$st');
+    await _setWidgetTileState(deviceId, channelIdx, currentState ?? 'OFF');
   }
+}
 
-  await refreshWidgetStorage();
+/// Rewrites one switch's state in the widget's own data and redraws, without
+/// touching the network or Hive — used for the instant tap feedback.
+Future<void> _setWidgetTileState(String deviceId, int channelIdx, String state) async {
+  try {
+    final raw = await HomeWidget.getWidgetData<String>('pinned_switches');
+    if (raw == null) return;
+    final entries = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+    for (final e in entries) {
+      if (e['device_id'] == deviceId && e['channel_idx'] == channelIdx) {
+        e['state'] = state;
+      }
+    }
+    await HomeWidget.saveWidgetData<String>('pinned_switches', jsonEncode(entries));
+    await _updateAllWidgets();
+  } catch (_) {}
 }

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/service_providers.dart';
 import '../../theme/motion.dart';
 import '../../services/backend/backend_api_exception.dart';
+import '../../services/backend/credential_store.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/spacing.dart';
 
@@ -36,6 +37,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   @override
   void initState() {
     super.initState();
+    _prefillSavedCredentials();
     // Surface a forced-logout explanation (see
     // AuthNotifier._doRefreshAccessToken /
     // sessionExpiredMessageProvider) exactly once, the moment this screen
@@ -54,6 +56,20 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
+    });
+  }
+
+  /// Fills the form with the "Remember me" credentials, if any — login
+  /// only, and never over something the user already started typing.
+  Future<void> _prefillSavedCredentials() async {
+    if (_isSignup) return;
+    final creds = await CredentialStore.read();
+    if (!mounted || creds == null) return;
+    if (_emailController.text.isNotEmpty || _passwordController.text.isNotEmpty) return;
+    setState(() {
+      _emailController.text = creds.email;
+      _passwordController.text = creds.password;
+      _rememberMe = true;
     });
   }
 

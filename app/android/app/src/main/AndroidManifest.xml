@@ -2,6 +2,9 @@
     <!-- Device API calls and mDNS discovery are LAN-only, no internet needed,
          but INTERNET is still required for Android to allow any socket I/O. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Lets widget taps reach the network while the app is in the background
+         (see MainActivity's battery channel). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <!-- Required to receive multicast (mDNS) packets — see multicast_dns package docs. -->
@@ -50,7 +53,8 @@
         </activity>
         <!-- Home-screen widget (Settings > Home screen widget) — see
              SmartSwitchWidgetProvider.kt. -->
-        <receiver android:name=".SmartSwitchWidgetProvider" android:exported="true">
+        <receiver android:name=".SmartSwitchWidgetProvider" android:exported="true"
+            android:label="Smart Switch — grid">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
             </intent-filter>
@@ -58,6 +62,23 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/smart_switch_widget_info"/>
         </receiver>
+        <!-- Single-switch widget, one switch per instance — see
+             SingleSwitchWidgetProvider.kt / SingleSwitchConfigureActivity.kt. -->
+        <receiver android:name=".SingleSwitchWidgetProvider" android:exported="true"
+            android:label="Smart Switch — single">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/single_switch_widget_info"/>
+        </receiver>
+        <activity android:name=".SingleSwitchConfigureActivity" android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.Dialog">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
+            </intent-filter>
+        </activity>
         <!-- Routes a widget row tap to widget_service.dart's headless
              toggle callback without launching the full app. -->
         <receiver android:name="es.antonborri.home_widget.HomeWidgetBackgroundReceiver" android:exported="true">

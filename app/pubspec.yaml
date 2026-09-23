@@ -50,6 +50,7 @@ dependencies:
   web_socket_channel: ^3.0.3
   mobile_scanner: ^7.4.1
   google_fonts: ^8.2.1
+  flutter_secure_storage: ^11.2.0
 
 dev_dependencies:
   flutter_test:

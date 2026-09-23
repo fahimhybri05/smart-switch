@@ -51,16 +51,25 @@ class _ScanDevicesScreenState extends ConsumerState<ScanDevicesScreen> {
       _scanning = true;
     });
 
-    final known = ref.read(knownDevicesProvider);
-    final knownIds = known.map((d) => d.deviceId).toSet();
+    final known = {for (final d in ref.read(knownDevicesProvider)) d.deviceId: d};
 
     final discovery = ref.read(discoveryServiceProvider);
     _sub?.cancel();
     _sub = discovery.startDiscovery().listen((device) {
       if (!mounted) return;
-      if (knownIds.contains(device.deviceId)) return;
       if (_found.any((d) => d.deviceId == device.deviceId)) return;
-      setState(() => _found.add(device));
+      // Already-added devices still show (marked added) instead of silently
+      // vanishing, and a changed IP is refreshed so the device is reachable.
+      final existing = known[device.deviceId];
+      if (existing != null && existing.lastKnownIp != device.host) {
+        ref
+            .read(knownDevicesProvider.notifier)
+            .upsert(existing.copyWith(lastKnownIp: device.host));
+      }
+      setState(() {
+        _found.add(device);
+        if (existing != null) _addedIds.add(device.deviceId);
+      });
     });
   }
 

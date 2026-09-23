@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 
 import 'package:hive_ce_flutter/hive_ce_flutter.dart';
 import 'package:http/http.dart' as http;
 
+import 'credential_store.dart';
 import 'jwt.dart';
 
 const _authSessionBoxName = 'auth_session';
@@ -37,6 +39,7 @@ class IsolateBackendAuth {
       final accessToken = box.get('access_token') as String?;
       final refreshToken = box.get('refresh_token') as String?;
       if (accessToken == null || refreshToken == null) {
+        debugPrint('IsolateBackendAuth: no saved session in auth_session box');
         return null;
       }
       if (!isJwtExpiredOrExpiringSoon(accessToken)) {
@@ -50,22 +53,50 @@ class IsolateBackendAuth {
               body: jsonEncode({'refreshToken': refreshToken}),
             )
             .timeout(const Duration(seconds: 8));
+        if (resp.statusCode == 401) {
+          // Refresh token already rotated by the main app (or expired) —
+          // sign back in with the "Remember me" credentials instead.
+          return await _reloginAndStore(box, backendUrl);
+        }
         if (resp.statusCode != 200) {
+          debugPrint('IsolateBackendAuth: refresh failed HTTP ${resp.statusCode}');
           return null;
         }
-        final json = jsonDecode(resp.body) as Map<String, dynamic>;
-        final newAccessToken = json['accessToken'] as String;
-        final newRefreshToken = json['refreshToken'] as String;
-        await box.putAll({
-          'access_token': newAccessToken,
-          'refresh_token': newRefreshToken,
-        });
-        return newAccessToken;
-      } catch (_) {
+        return await _storeTokens(box, resp.body);
+      } catch (e) {
+        debugPrint('IsolateBackendAuth: refresh error $e');
         return null;
       }
     } finally {
       await box.close();
     }
+  }
+
+  static Future<String> _storeTokens(Box box, String body) async {
+    final json = jsonDecode(body) as Map<String, dynamic>;
+    final newAccessToken = json['accessToken'] as String;
+    await box.putAll({
+      'access_token': newAccessToken,
+      'refresh_token': json['refreshToken'] as String,
+    });
+    return newAccessToken;
+  }
+
+  static Future<String?> _reloginAndStore(Box box, String backendUrl) async {
+    final creds = await CredentialStore.read();
+    if (creds == null || creds.email != box.get('email')) {
+      return null;
+    }
+    final resp = await http
+        .post(
+          Uri.parse('$backendUrl/auth/login'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'email': creds.email, 'password': creds.password}),
+        )
+        .timeout(const Duration(seconds: 8));
+    if (resp.statusCode != 200) {
+      return null;
+    }
+    return _storeTokens(box, resp.body);
   }
 }

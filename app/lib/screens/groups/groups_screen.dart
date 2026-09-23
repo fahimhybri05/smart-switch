@@ -211,7 +211,6 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
     var anyOn = false;
     var anyLoading = false;
     var anyOffline = false;
-    var anyPending = false;
 
     for (final member in group.members) {
       final device = _deviceFor(member.deviceId);
@@ -224,13 +223,12 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
         (device.deviceId, member.channelIdx)
       ];
       if (override != null) {
-        anyPending = true;
         if (override == ChannelPowerState.on) anyOn = true;
         allOn = override == ChannelPowerState.on && allOn;
         continue;
       }
       final channelsAsync = ref.watch(channelStatesProvider(device));
-      if (channelsAsync.isLoading) anyLoading = true;
+      if (channelsAsync.isLoading && !channelsAsync.hasValue) anyLoading = true;
       // See switch_tile.dart/device_tile.dart's identical comment —
       // channelsAsync.hasError almost never fires (channelStatesProvider
       // swallows poll failures into a successful empty list so its retry
@@ -249,9 +247,7 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
       anyOn = anyOn || isOn;
       allOn = allOn && isOn;
     }
-    final visualState = anyPending
-        ? DeviceVisualState.pending
-        : anyOffline && !anyOn
+    final visualState = anyOffline && !anyOn
         ? DeviceVisualState.offline
         : anyLoading
         ? DeviceVisualState.connecting
@@ -260,8 +256,6 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
         : DeviceVisualState.off;
     final stateLabel = anyOffline
         ? 'Some devices offline'
-        : anyPending
-        ? 'Updating group'
         : anyLoading
         ? 'Connecting'
         : allOn

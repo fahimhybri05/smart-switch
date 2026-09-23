@@ -48,7 +48,10 @@ class SwitchTile extends ConsumerWidget {
     final isOn = override != null
         ? override == ChannelPowerState.on
         : polledIsOn;
-    final isLoading = override == null && channelsAsync.isLoading;
+    // Only the very first load (no data yet) counts as connecting — a
+    // background re-poll keeps showing the last known state.
+    final isLoading =
+        override == null && channelsAsync.isLoading && !channelsAsync.hasValue;
     // channelsAsync.hasError almost never fires in practice —
     // channelStatesProvider swallows every poll failure into a successful
     // `yield const []` so its retry loop can keep going (see that
@@ -58,9 +61,8 @@ class SwitchTile extends ConsumerWidget {
     final isOffline =
         override == null &&
         (channelsAsync.hasError || ref.watch(deviceUnreachableProvider(device)));
-    final visualState = override != null
-        ? DeviceVisualState.pending
-        : isOffline
+    // A command in flight shows its target state right away (no spinner).
+    final visualState = isOffline
         ? DeviceVisualState.offline
         : isLoading
         ? DeviceVisualState.connecting
@@ -75,7 +77,7 @@ class SwitchTile extends ConsumerWidget {
           kind: _kindFor(switchConfig.name),
           state: visualState,
           height: 58,
-          onTap: isOffline || override != null
+          onTap: isOffline
               ? null
               : () => _toggle(context, ref, !isOn),
         ),
@@ -109,7 +111,7 @@ class SwitchTile extends ConsumerWidget {
           const SizedBox(width: Spacing.xs),
           Switch(
             value: isOn,
-            onChanged: isOffline || override != null
+            onChanged: isOffline
                 ? null
                 : (value) => _toggle(context, ref, value),
           ),

@@ -9,6 +9,7 @@ import {
   signAccessToken,
   verifyRefreshToken,
 } from '../auth/tokens.js';
+import { verifyCredentials } from '../auth/credentials.js';
 import { pool } from '../db/pool.js';
 
 export const authRouter = Router();
@@ -83,23 +84,11 @@ authRouter.post('/login', credentialsLimiter, async (req, res) => {
   }
   const { email, password } = parsed.data;
 
-  const { rows } = await pool.query(
-    'SELECT id, password_hash FROM users WHERE email = $1',
-    [email],
-  );
-  const user = rows[0];
-  // Always run bcrypt.compare, even with no matching user (against a fixed
-  // dummy hash), so a bad email and a bad password take the same time —
-  // avoids leaking which emails are registered via response timing.
-  const hashToCheck =
-    user?.password_hash ??
-    '$2a$10$CwTycUXWue0Thq9StjUM0uJ8Yb1qsm.MtRhAxIzTv6HqSlvBk4uYK';
-  const valid = await bcrypt.compare(password, hashToCheck);
-
-  if (!user || !valid) {
+  const userId = await verifyCredentials(email, password);
+  if (!userId) {
     return res.status(401).json({ error: 'invalid email or password' });
   }
-  await issueTokenPair(user.id, res);
+  await issueTokenPair(userId, res);
 });
 
 authRouter.post('/refresh', async (req, res) => {

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'backend/isolate_backend_auth.dart';
 import 'device_api_client.dart';
 import 'device_transport.dart';
@@ -39,10 +40,12 @@ Future<T?> viaLocalOrCloud<T>({
     }
   }
   if (backendUrl == null) {
+    debugPrint('viaLocalOrCloud: no backend URL');
     return null;
   }
   final token = await IsolateBackendAuth.getValidAccessToken(backendUrl);
   if (token == null) {
+    debugPrint('viaLocalOrCloud: no valid access token for $backendUrl');
     return null;
   }
   try {
@@ -55,7 +58,8 @@ Future<T?> viaLocalOrCloud<T>({
         ),
       ),
     );
-  } catch (_) {
+  } catch (e) {
+    debugPrint('viaLocalOrCloud: cloud relay failed for $deviceId: $e');
     return null;
   }
 }

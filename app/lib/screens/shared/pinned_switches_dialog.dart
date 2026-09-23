@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/device/device_config.dart';
 import '../../models/local/known_device.dart';
 import '../../models/local/pinned_switch.dart';
 import '../../providers/service_providers.dart';
+import '../../services/battery_exemption.dart';
 import '../../services/widget_service.dart';
 
 Future<void> showPinnedSwitchesDialog(BuildContext context) {
@@ -47,19 +49,18 @@ class _PinnedSwitchesDialogState extends ConsumerState<_PinnedSwitchesDialog> {
       final devices = ref.read(knownDevicesProvider);
       final options = <_SwitchOption>[];
       for (final KnownDevice device in devices) {
-        // The home-screen widget runs outside the Flutter app's own
-        // process/provider tree and only ever does a direct local HTTP
-        // call — it can't go through the cloud relay the way in-app
-        // screens now can (see activeDeviceApiClientProvider). A device
-        // synced in from the backend with no locally-discovered IP yet
-        // simply can't be pinned until it's been reached on this LAN at
-        // least once.
+        // Cloud-only devices (no LAN IP yet) are pinnable too: the widget's
+        // tap/refresh go through viaLocalOrCloud, which falls back to the
+        // backend relay when there's no IP.
         final lastKnownIp = device.lastKnownIp;
-        if (lastKnownIp == null) continue;
-
-        final config = await ref
-            .read(deviceApiClientProvider('http://$lastKnownIp'))
-            .getConfig();
+        final DeviceConfig config;
+        try {
+          config = await ref
+              .read(activeDeviceApiClientProvider(device))
+              .getConfig();
+        } catch (_) {
+          continue; // one unreachable device shouldn't hide the others
+        }
         for (final sw in config.switches) {
           options.add(
             _SwitchOption(
@@ -129,7 +130,7 @@ class _PinnedSwitchesDialogState extends ConsumerState<_PinnedSwitchesDialog> {
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Text(
-            'Pick up to $maxPinnedSwitches switches to show on the home-screen widget.',
+            'Pick up to $maxPinnedSwitches switches. The grid widget shows the first 4; single-switch widgets can use any of them.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ),
@@ -159,8 +160,12 @@ class _PinnedSwitchesDialogState extends ConsumerState<_PinnedSwitchesDialog> {
         .map((o) => o.pinned)
         .toList();
     await setPinnedSwitches(selected);
-    if (mounted) {
-      Navigator.of(context).pop();
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    // Without the exemption, Android blocks the widget's network while the
+    // app is in the background, so taps would silently do nothing.
+    if (selected.isNotEmpty && !await isBatteryExempt()) {
+      await requestBatteryExemption();
     }
   }
 }

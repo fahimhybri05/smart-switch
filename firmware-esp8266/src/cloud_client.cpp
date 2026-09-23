@@ -225,6 +225,13 @@ static void sendAuthFrame() {
   JsonDocument doc;
   doc["deviceId"] = cfg.device_id;
   doc["cloudSecret"] = cfg.cloud_secret;
+  // Diagnostics for the server log — lets a reconnect be told apart from a
+  // crash/reboot (resetReason + uptime) without a serial cable attached.
+  doc["fw"] = cfg.fw_version;
+  doc["resetReason"] = ESP.getResetReason();
+  doc["uptimeS"] = millis() / 1000;
+  doc["freeHeap"] = ESP.getFreeHeap();
+  doc["rssi"] = WiFi.RSSI();
   String out;
   serializeJson(doc, out);
   s_ws.sendTXT(out);
@@ -297,8 +304,9 @@ static void onWsEvent(WStype_t type, uint8_t *payload, size_t length) {
       s_consecutiveFailures++;
       uint32_t retryMs = computeReconnectIntervalMs();
       s_ws.setReconnectInterval(retryMs);
-      Serial.printf("cloud: disconnected/unreachable (%s:%d), retry in %lus\n", SS_CLOUD_WS_HOST,
-                    SS_CLOUD_WS_PORT, (unsigned long)(retryMs / 1000));
+      Serial.printf("cloud: disconnected/unreachable (%s:%d), retry in %lus, heap=%u rssi=%d\n",
+                    SS_CLOUD_WS_HOST, SS_CLOUD_WS_PORT, (unsigned long)(retryMs / 1000),
+                    ESP.getFreeHeap(), WiFi.RSSI());
       break;
     }
     case WStype_TEXT:

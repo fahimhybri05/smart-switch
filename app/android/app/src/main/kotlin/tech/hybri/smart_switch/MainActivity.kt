@@ -1,11 +1,15 @@
 package tech.hybri.smart_switch
 
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.Uri
 import android.net.wifi.WifiManager
+import android.os.PowerManager
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -26,8 +30,29 @@ class MainActivity : FlutterActivity() {
     private val networkChannelName = "tech.hybri.smart_switch/network_binding"
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
+    // Widget taps run while the app is in the background, where Battery
+    // Saver / app standby block this app's network entirely unless it's on
+    // the battery-optimization allowlist. See lib/services/battery_exemption.dart.
+    private val batteryChannelName = "tech.hybri.smart_switch/battery"
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, batteryChannelName).setMethodCallHandler { call, result ->
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            when (call.method) {
+                "isExempt" -> result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                "requestExemption" -> {
+                    if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                        startActivity(
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                .setData(Uri.parse("package:$packageName")),
+                        )
+                    }
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, multicastChannelName).setMethodCallHandler { call, result ->
             when (call.method) {
                 "acquire" -> {
