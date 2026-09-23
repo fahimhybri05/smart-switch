@@ -5,7 +5,6 @@
 
 #include "config_store.h"
 #include "http_api.h"
-#include "http_auth.h"
 
 static WifiReconfigState s_state = WifiReconfigState::Idle;
 
@@ -87,8 +86,8 @@ void wifiProvisioningBegin() {
     applyStaticIpIfConfigured();
     WiFi.begin();
     // Intentionally blocking: this runs before any other subsystem starts
-    // (httpApiBegin/scheduleExecBegin/cloudClientBegin/recoveryButtonBegin
-    // are all still ahead in setup()), so nothing already running is frozen
+    // (httpApiBegin/cloudClientBegin/recoveryButtonBegin are all still
+    // ahead in setup()), so nothing already running is frozen
     // by it — the device just isn't reachable on any interface for up to
     // 20s at boot. Not shortened here: it's an existing, presumably-tuned
     // value, and a shorter timeout risks more frequent unnecessary SoftAP
@@ -180,10 +179,10 @@ void wifiProvisioningLoop() {
 }
 
 void wifiProvisioningHandlePost() {
-  if (configStore.cfg().auth_password_set && !httpAuthCheck(httpServer)) {
-    return;
-  }
-
+  // No local password/auth check anymore (see docs/plan.md) — the trust
+  // boundary for every LAN endpoint, this one included, is now "this
+  // request came from a device that already holds a valid, backend-issued
+  // cloud_secret", not a locally-set password this device no longer stores.
   JsonDocument doc;
   if (deserializeJson(doc, httpServer.arg("plain")) != DeserializationError::Ok) {
     httpServer.send(400, "application/json", "{\"error\":\"invalid JSON\"}");

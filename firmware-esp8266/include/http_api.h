@@ -14,20 +14,34 @@ void httpApiBegin();
 // Must be called every loop() iteration.
 void httpApiLoop();
 
-// Dispatches {method, path, bodyJson} to the same logic the ESP8266WebServer
-// routes use, without touching the live WebServer request object — safe to
-// call in-process from anywhere (this chip has no RTOS, so "in-process" and
-// "synchronous" are the same thing; this replaces cloud_client.cpp's old
-// loopback-HTTP-to-itself approach, which self-deadlocked because
-// ESP8266WebServer::handleClient() can't re-enter while something else in
-// the same loop() iteration blocks waiting on it). Auth is still enforced
-// exactly as it is for a real HTTP request — httpAuthCheck's existing
-// loopback-bypass logic (matching 127.0.0.1) should be treated as
-// unconditionally authorized here too, since this call path only exists for
-// already-cloud-authenticated relayed commands (same trust boundary the
-// ESP32 firmware's http_auth.c documents for its own loopback bypass).
-// method: "GET"|"POST"|"DELETE". path: e.g. "/api/channels/0/state" (no
-// query string). bodyJson: raw JSON body string, or "" for none.
-// outStatus/outBody: HTTP-shaped status code and JSON response body string.
-void httpApiDispatch(const char* method, const char* path, const char* bodyJson,
-                      int* outStatus, String* outBody);
+// The device is a thin IO+networking client now — the backend is
+// authoritative for every /api/* decision except device-local network
+// reconfiguration (see httpApiHandleNetworkConfig below). Every registered
+// route (other than GET / and /api/wifi, which provisioning can't depend on
+// a cloud link to serve) forwards straight through this function: fails
+// fast with 503 if !cloudClientIsConnected(); otherwise sends
+// {reqId, method, path, body} over the WS tunnel via cloudClientForward(),
+// blocking this call only (pumping cloudClientLoop() internally) for a
+// short bounded timeout, replying 504 on timeout. If the path matches
+// POST /api/channels/{idx}/state and the backend's response is 2xx, applies
+// it locally via channelControlSetState() before returning — the device
+// still owns its own relay hardware; the backend's job here is authorize +
+// attribute, not touch GPIOs directly.
+bool httpApiForward(const char *method, const char *path, const char *bodyJson,
+                     int *outStatus, String *outBody);
+
+// POST /api/network (static IP / DHCP) is the one endpoint that stays fully
+// device-local and is never forwarded to the backend — a device can't
+// depend on the cloud connection it hasn't established yet to configure its
+// own network. Shared between the local LAN route (http_api.cpp) and
+// cloud_client.cpp's handling of a backend-relayed POST /api/network
+// (reachable when the app uses the cloud-WS/cloud-REST transport instead of
+// LAN) so this one path's device-local logic isn't duplicated. Does NOT
+// reboot on success — callers do that themselves after handing the response
+// back to whichever transport is in play, same "respond, then reboot"
+// ordering as before.
+void httpApiHandleNetworkConfig(const String &bodyJson, int *outStatus, String *outBody);
+
+// GET /api/info's JSON body — device identity/runtime facts, answered
+// on-device for both the local route and backend-relayed requests.
+String httpApiBuildInfo();

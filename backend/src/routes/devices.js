@@ -4,10 +4,11 @@ import { z } from 'zod';
 import { hashDeviceSecret } from '../auth/deviceSecret.js';
 import { getHouseholdDevicesSnapshot } from '../db/devices.js';
 import { pool } from '../db/pool.js';
+import { dispatchDeviceApi } from '../deviceApi/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { attachHouseholds, isHouseholdMember, isHouseholdOwner } from '../middleware/household.js';
 import { noteExpectedStateChange } from '../ws/attribution.js';
-import { relayCommand } from '../ws/registry.js';
+import { isDeviceOnline, relayCommand } from '../ws/registry.js';
 
 const CHANNEL_STATE_PATH = /^\/api\/channels\/(\d+)\/state$/;
 
@@ -164,7 +165,16 @@ devicesRouter.post('/:deviceId/command', async (req, res) => {
 
   const { method, path, body } = parsed.data;
   const match = path.match(CHANNEL_STATE_PATH);
-  if (match && body?.state) {
+  if (!match || method !== 'POST') {
+    // Everything except actuation is answered by the backend itself — the
+    // device holds no config to answer it from. Still gated on the device
+    // being online so callers' offline detection behaves as before.
+    if (!isDeviceOnline(req.params.deviceId)) {
+      return res.status(503).json({ error: 'device_offline' });
+    }
+    return res.status(200).json(await dispatchDeviceApi(req.params.deviceId, method, path, body));
+  }
+  if (body?.state) {
     noteExpectedStateChange(req.params.deviceId, Number(match[1]), body.state, {
       source: 'widget',
       actorUserId: req.userId,

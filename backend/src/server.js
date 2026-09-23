@@ -7,6 +7,10 @@ import { createApp } from './app.js';
 import { startAutomationScheduler, waitForCurrentTick } from './automations/scheduler.js';
 import { pool } from './db/pool.js';
 import {
+  startDeviceScheduler,
+  waitForCurrentDeviceScheduleTick,
+} from './deviceSchedules/scheduler.js';
+import {
   authenticateClientUpgrade,
   handleClientConnection,
 } from './ws/clientServer.js';
@@ -119,6 +123,7 @@ server.listen(port, () => {
 });
 
 const stopAutomationScheduler = startAutomationScheduler();
+const stopDeviceScheduler = startDeviceScheduler();
 const deviceHeartbeatInterval = startDeviceHeartbeat();
 
 // Lets `systemctl restart`/`stop` (or a plain Ctrl-C) close cleanly instead
@@ -133,6 +138,7 @@ async function shutdown(signal) {
   shuttingDown = true;
   console.log(`${signal} received, shutting down`);
   stopAutomationScheduler();
+  stopDeviceScheduler();
   clearInterval(deviceHeartbeatInterval);
 
   const forceExitTimer = setTimeout(() => {
@@ -141,11 +147,15 @@ async function shutdown(signal) {
   }, 10_000);
 
   // Give an in-flight scheduler tick (which may be mid RELAY_RETRY_DELAY_MS
-  // sleep inside fireAutomation) a bounded chance to actually relay its
-  // commands before the device sockets it needs go away — otherwise a
-  // just-fired automation's action is silently dropped on every deploy.
-  // The existing 10s forceExitTimer above remains the ultimate backstop.
-  await Promise.race([waitForCurrentTick(), sleep(5000)]);
+  // sleep inside fireAutomation/fireDeviceSchedule) a bounded chance to
+  // actually relay its commands before the device sockets it needs go away
+  // — otherwise a just-fired automation/device-schedule action is silently
+  // dropped on every deploy. The existing 10s forceExitTimer above remains
+  // the ultimate backstop.
+  await Promise.race([
+    Promise.all([waitForCurrentTick(), waitForCurrentDeviceScheduleTick()]),
+    sleep(5000),
+  ]);
 
   for (const ws of deviceWss.clients) ws.close(1001, 'server shutting down');
   for (const ws of clientWss.clients) ws.close(1001, 'server shutting down');

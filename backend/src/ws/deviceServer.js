@@ -1,6 +1,7 @@
 import { logActivity } from '../activity.js';
 import { evaluateStateTriggeredAutomations } from '../automations/engine.js';
 import { hashDeviceSecret } from '../auth/deviceSecret.js';
+import { dispatchDeviceApi, ensureDeviceDefaults, pushHwConfigToDevice } from '../deviceApi/index.js';
 import { pool } from '../db/pool.js';
 import { takeAttribution } from './attribution.js';
 import {
@@ -139,6 +140,16 @@ export function handleDeviceConnection(ws) {
           if (result.householdId) {
             broadcastToHousehold(result.householdId, { event: 'device_online', deviceId });
           }
+          // The trimmed-down firmware holds no config of its own besides
+          // this hw-actuation cache (interlock/input-mode/inching) — give
+          // it the current picture on every fresh connect, same as it
+          // would have loaded from its own /config.json before this
+          // architecture change. Fire-and-forget; a failure here just
+          // means the device keeps whatever it last cached, logged rather
+          // than failing the connection.
+          ensureDeviceDefaults(deviceId)
+            .then(() => pushHwConfigToDevice(deviceId))
+            .catch((err) => console.error(`initial hw_config_push failed for ${deviceId}`, err));
         } catch (err) {
           console.error(`device auth failed for ${msg.deviceId}`, err);
           ws.close(1011, 'internal error');
@@ -149,6 +160,23 @@ export function handleDeviceConnection(ws) {
       // Relayed responses.
       if (msg.reqId && 'status' in msg) {
         resolveDeviceResponse(msg.reqId, msg.status, msg.body);
+        return;
+      }
+
+      // Device-initiated request: a LAN caller hit the device's own local
+      // HTTP API, and the device is forwarding it here (its
+      // forward-and-wait) to decide, since the backend now owns every
+      // /api/* decision. Distinct from the reply branch above — that one
+      // matches on `'status' in msg`, this one on `method`/`path` being
+      // present instead. See docs/plan.md's Wire protocol section.
+      if (msg.reqId && msg.method && msg.path) {
+        const { status, body: respBody } = await dispatchDeviceApi(
+          deviceId,
+          msg.method,
+          msg.path,
+          msg.body,
+        );
+        ws.send(JSON.stringify({ reqId: msg.reqId, status, body: respBody }));
         return;
       }
 

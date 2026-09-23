@@ -2,6 +2,7 @@ import { verifyAccessToken } from '../auth/tokens.js';
 import { getHouseholdDevicesSnapshot } from '../db/devices.js';
 import { getUserHouseholdIds } from '../db/households.js';
 import { pool } from '../db/pool.js';
+import { dispatchDeviceApi } from '../deviceApi/index.js';
 import { noteExpectedStateChange } from './attribution.js';
 import { isDeviceOnline, registerClient, relayToDevice, unregisterClient } from './registry.js';
 
@@ -79,7 +80,13 @@ export function handleClientConnection(ws, userId) {
       // origin of a relayed command — informational only for activity
       // history, not a security boundary. See docs/plan.md.
       const match = typeof path === 'string' && path.match(CHANNEL_STATE_PATH);
-      if (match && body?.state) {
+      if (!match || method !== 'POST') {
+        // Everything except actuation is answered by the backend itself —
+        // the device holds no config to answer it from.
+        const { status, body: respBody } = await dispatchDeviceApi(deviceId, method, path, body);
+        return ws.send(JSON.stringify({ reqId, status, body: respBody }));
+      }
+      if (body?.state) {
         noteExpectedStateChange(deviceId, Number(match[1]), body.state, {
           source: msg.source ?? 'app',
           actorUserId: userId,

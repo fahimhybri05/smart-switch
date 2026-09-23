@@ -154,6 +154,28 @@ export function relayToDevice(deviceId, { method, path, body }, clientWs, client
     });
 }
 
+/**
+ * Fire-and-forget push of `{event: "hw_config_push", channels,
+ * interlockEnabled}` down to `deviceId` — no reqId, no response expected,
+ * the same one-way shape as the device's own unsolicited `state_changed`
+ * event, just in the opposite direction. This is the one config the
+ * trimmed-down firmware still caches locally (per-channel input mode/
+ * inching duration, plus the device-wide interlock flag), needed for the
+ * instant/offline physical-input exception to behave correctly. Sent once
+ * right after auth on every connect and again whenever an admin edits one
+ * of these fields (see deviceApi/hwConfig.js's pushHwConfigToDevice,
+ * the only caller). Silently a no-op if the device isn't currently
+ * connected — nothing to queue, since the device gets the full picture
+ * again in full on its next reconnect.
+ */
+export function sendHwConfigPush(deviceId, { channels, interlockEnabled }) {
+  const deviceWs = deviceSockets.get(deviceId);
+  if (!deviceWs || deviceWs.readyState !== deviceWs.OPEN) {
+    return;
+  }
+  deviceWs.send(JSON.stringify({ event: 'hw_config_push', channels, interlockEnabled }));
+}
+
 /** Called from deviceServer.js when a device replies `{reqId, status, body}`. */
 export function resolveDeviceResponse(reqId, status, body) {
   const pending = pendingRequests.get(reqId);

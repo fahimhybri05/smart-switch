@@ -8,7 +8,6 @@
 #include "physical_input.h"
 #include "recovery_button.h"
 #include "relay_hal.h"
-#include "schedule_exec.h"
 #include "wifi_provisioning.h"
 
 static bool s_mdnsStarted = false;
@@ -34,14 +33,16 @@ static void startMdnsIfNeeded() {
   s_mdnsStarted = true;
 }
 
-static void applyBootStates() {
+// Restores each relay to whatever it was last commanded to do, before
+// networking starts — same "never leave a relay in an undefined state while
+// WiFi comes up" guarantee the old default_boot_state logic gave, just
+// driven by configStore.cfg().lastState[] now that the backend, not this
+// device, decides what a channel's state should be (see channel_control.cpp,
+// which keeps lastState[] current on every subsequent change).
+static void restoreLastStates() {
   const SsConfig &cfg = configStore.cfg();
-  for (uint8_t i = 0; i < cfg.switch_count; i++) {
-    const SsSwitch &sw = cfg.switches[i];
-    // "LAST" isn't implemented (matches the ESP32 firmware's scaffold —
-    // relay_hal has no persisted last-state read-back) — treated as OFF.
-    bool on = strcmp(sw.default_boot_state, "ON") == 0;
-    relayHalSetState(sw.channel_idx, on);
+  for (uint8_t i = 0; i < relayHalChannelCount(); i++) {
+    relayHalSetState(i, cfg.lastState[i]);
   }
 }
 
@@ -51,7 +52,7 @@ void setup() {
 
   configStore.begin();
   relayHalInit();
-  applyBootStates();
+  restoreLastStates();
   channelControlInit();
   physicalInputInit();
 
@@ -66,7 +67,6 @@ void setup() {
 
   wifiProvisioningBegin();
   httpApiBegin();
-  scheduleExecBegin();
   cloudClientBegin();
   recoveryButtonBegin();
 
@@ -83,7 +83,6 @@ void loop() {
   }
   httpApiLoop();
   configStore.loop();
-  scheduleExecLoop();
   channelControlLoop();
   physicalInputLoop();
   cloudClientLoop();

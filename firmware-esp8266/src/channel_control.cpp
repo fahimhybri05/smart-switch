@@ -29,20 +29,22 @@ void channelControlSetState(uint8_t channelIdx, bool on) {
       if (relayHalGetState(i)) {
         s_inchingDeadlineMs[i] = 0;
         relayHalSetState(i, false);
+        configStore.setLastState(i, false);
         cloudClientNotifyStateChanged(i, false);
       }
     }
   }
 
   relayHalSetState(channelIdx, on);
+  configStore.setLastState(channelIdx, on);
   cloudClientNotifyStateChanged(channelIdx, on);
 
   if (on) {
-    for (uint8_t i = 0; i < cfg.switch_count; i++) {
-      const SsSwitch &sw = cfg.switches[i];
-      if (sw.channel_idx == channelIdx) {
-        if (sw.inchingMs > 0) {
-          uint32_t deadline = millis() + sw.inchingMs;
+    for (uint8_t i = 0; i < cfg.channelHwCount; i++) {
+      const SsChannelHw &hw = cfg.channelHw[i];
+      if (hw.channel_idx == channelIdx) {
+        if (hw.inchingMs > 0) {
+          uint32_t deadline = millis() + hw.inchingMs;
           if (deadline == 0) deadline = 1; // avoid colliding with the 0 sentinel
           s_inchingDeadlineMs[channelIdx] = deadline;
         }
