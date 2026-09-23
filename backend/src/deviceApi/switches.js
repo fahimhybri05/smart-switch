@@ -16,8 +16,10 @@ export async function upsertSwitch(deviceId, body) {
     return { status: 400, body: { error: `channel_idx must be within [0, ${DEFAULT_CHANNEL_COUNT})` } };
   }
 
-  const name = body?.name ?? null;
-  const zone = body?.zone ?? null;
+  // Never NULL: the app parses name/zone as non-nullable strings, and the
+  // old firmware always sent "" for an unset value.
+  const name = body?.name ?? '';
+  const zone = body?.zone ?? '';
   const type = 'ON_OFF';
   const defaultBootState = body?.default_boot_state === 'ON' ? 'ON' : 'OFF';
   const inputModeProvided = body?.input_mode !== undefined;

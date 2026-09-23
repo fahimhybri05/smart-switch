@@ -17,8 +17,8 @@ export async function ensureDeviceDefaults(deviceId) {
     );
     if (rowCount > 0) {
       await client.query(
-        `INSERT INTO device_switches (device_id, channel_idx, name)
-         SELECT $1, i, 'Channel ' || i FROM generate_series(0, $2 - 1) AS i
+        `INSERT INTO device_switches (device_id, channel_idx, name, zone)
+         SELECT $1, i, 'Channel ' || i, '' FROM generate_series(0, $2 - 1) AS i
          ON CONFLICT (device_id, channel_idx) DO NOTHING`,
         [deviceId, DEFAULT_CHANNEL_COUNT],
       );
