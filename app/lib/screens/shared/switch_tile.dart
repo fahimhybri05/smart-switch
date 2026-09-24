@@ -10,13 +10,15 @@ import '../../theme/spacing.dart';
 import 'device_visualization.dart';
 import 'edit_switch_dialog.dart';
 import 'friendly_error.dart';
+import 'lock_badge.dart';
 
 /// One switch's live ON/OFF control tile — reused by Zones and Switches
 /// screens. Reads live state from [channelStatesProvider]'s 2s poll,
 /// overlaid with an optimistic [channelOverrideProvider] value the instant
 /// a toggle is tapped (see that provider's doc comment), and writes via
-/// [DeviceApiClient.setChannelState]. The edit icon opens a rename/zone
-/// dialog (POST /api/switches).
+/// [DeviceApiClient.setChannelState]. The edit icon opens the switch
+/// settings dialog (POST /api/switches). A locked switch shows a lock badge
+/// and answers taps with a snackbar instead of sending a command.
 class SwitchTile extends ConsumerWidget {
   const SwitchTile({
     super.key,
@@ -82,11 +84,22 @@ class SwitchTile extends ConsumerWidget {
               : () => _toggle(context, ref, !isOn),
         ),
       ),
-      title: Text(
-        switchConfig.name,
-        style: Theme.of(
-          context,
-        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              switchConfig.name,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+          if (switchConfig.locked) ...[
+            const SizedBox(width: Spacing.xs),
+            const SwitchLockBadge(),
+          ],
+        ],
       ),
       subtitle: Text(
         isOffline
@@ -105,7 +118,7 @@ class SwitchTile extends ConsumerWidget {
         children: [
           IconButton(
             icon: const Icon(Icons.edit_outlined),
-            tooltip: 'Rename / set zone',
+            tooltip: 'Switch settings',
             onPressed: () => _edit(context, ref),
           ),
           const SizedBox(width: Spacing.xs),
@@ -125,6 +138,12 @@ class SwitchTile extends ConsumerWidget {
   }
 
   Future<void> _toggle(BuildContext context, WidgetRef ref, bool value) async {
+    // Locked: say so instead of sending — the backend would reject it
+    // anyway (423 switch_locked), this just skips the round trip.
+    if (switchConfig.locked) {
+      showSwitchLockedSnackBar(context);
+      return;
+    }
     HapticFeedback.lightImpact();
     final desired = value ? ChannelPowerState.on : ChannelPowerState.off;
     ref
@@ -147,31 +166,6 @@ class SwitchTile extends ConsumerWidget {
     }
   }
 
-  Future<void> _edit(BuildContext context, WidgetRef ref) async {
-    final result = await showEditSwitchDialog(context, switchConfig);
-    if (result == null) return;
-
-    final (name, zone, inputMode, inchingMs) = result;
-    final client = ref.read(activeDeviceApiClientProvider(device));
-    try {
-      await client.upsertSwitch(
-        SwitchConfig(
-          channelIdx: switchConfig.channelIdx,
-          name: name,
-          zone: zone,
-          type: switchConfig.type,
-          defaultBootState: switchConfig.defaultBootState,
-          inputMode: inputMode,
-          inchingMs: inchingMs,
-        ),
-      );
-      ref.invalidate(deviceConfigProvider(device));
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(friendlyErrorMessage(e, 'Save'))),
-        );
-      }
-    }
-  }
+  Future<void> _edit(BuildContext context, WidgetRef ref) =>
+      editSwitchSettings(context, ref, device, switchConfig);
 }

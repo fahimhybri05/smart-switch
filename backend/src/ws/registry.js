@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 
 import { getHouseholdMemberIds } from '../db/households.js';
+import { channelCommandTarget, checkChannelCommand, guardError } from '../safety/guard.js';
+import { discardRecentExpectedStateChange } from './attribution.js';
 
 /** deviceId -> WebSocket (one live connection per device, the newest wins). */
 const deviceSockets = new Map();
@@ -160,32 +162,59 @@ function sendRelay(deviceId, { method, path, body }) {
   return promise;
 }
 
+/** Runs the safety guard (safety/guard.js) for a channel-state command;
+ * resolves null to proceed, else the block. On a block, discards the
+ * attribution the caller noted just before relaying (see attribution.js). */
+async function guardChannelCommand(deviceId, command) {
+  const target = channelCommandTarget(command);
+  if (!target) return null;
+  const block = await checkChannelCommand(deviceId, target.channelIdx, target.state);
+  if (block && (target.state === 'ON' || target.state === 'OFF')) {
+    discardRecentExpectedStateChange(deviceId, target.channelIdx, target.state);
+  }
+  return block;
+}
+
+function offlineError() {
+  return Object.assign(new Error('device_offline'), { code: 'device_offline' });
+}
+
+function isSocketOpen(deviceId) {
+  const deviceWs = deviceSockets.get(deviceId);
+  return Boolean(deviceWs && deviceWs.readyState === deviceWs.OPEN);
+}
+
 /**
  * Relays a command and resolves with the device's `{status, body}`
  * response. Used by the automation engine and the REST relay endpoint
  * (`POST /devices/:deviceId/command`) — anything without a persistent
  * client WS to route a reply back through.
+ *
+ * Channel-state commands are checked against the switch lock / min-off
+ * rules first (safety/guard.js) and rejected with a `.code` of
+ * `switch_locked` / `min_off_time` (+ `.retryAfterSeconds`). Only the
+ * max-runtime auto-OFF passes `{bypassGuard: true}`.
  */
-export async function relayCommand(deviceId, { method, path, body }) {
+export async function relayCommand(deviceId, { method, path, body }, { bypassGuard = false } = {}) {
+  if (!isSocketOpen(deviceId)) {
+    throw offlineError();
+  }
+  // Non-actuation commands (e.g. /api/network) skip the guard entirely and
+  // go out synchronously, as before.
+  if (!bypassGuard && channelCommandTarget({ method, path, body })) {
+    const block = await guardChannelCommand(deviceId, { method, path, body });
+    if (block) {
+      throw guardError(block);
+    }
+  }
   const promise = sendRelay(deviceId, { method, path, body });
   if (!promise) {
-    throw Object.assign(new Error('device_offline'), { code: 'device_offline' });
+    throw offlineError();
   }
   return promise;
 }
 
-/**
- * Same relay, routed back to a specific client WS connection instead of
- * returned as a Promise — what `clientServer.js`'s message handler uses.
- * Sends `{reqId: clientReqId, status: 0, error: 'device_offline'|'device_timeout'}`
- * on failure, matching the wire shape clients have always gotten.
- */
-export function relayToDevice(deviceId, { method, path, body }, clientWs, clientReqId) {
-  const promise = sendRelay(deviceId, { method, path, body });
-  if (!promise) {
-    clientWs?.send(JSON.stringify({ reqId: clientReqId, status: 0, error: 'device_offline' }));
-    return null;
-  }
+function pipeToClient(promise, clientWs, clientReqId) {
   promise
     .then(({ status, body: respBody }) => {
       clientWs?.send(JSON.stringify({ reqId: clientReqId, status, body: respBody }));
@@ -194,6 +223,47 @@ export function relayToDevice(deviceId, { method, path, body }, clientWs, client
       clientWs?.send(JSON.stringify({ reqId: clientReqId, status: 0, error: err.code ?? 'device_timeout' }));
     });
   return promise.reqId;
+}
+
+/**
+ * Same relay, routed back to a specific client WS connection instead of
+ * returned as a Promise — what `clientServer.js`'s message handler uses.
+ * Sends `{reqId: clientReqId, status: 0, error: 'device_offline'|'device_timeout'}`
+ * on failure, matching the wire shape clients have always gotten, and
+ * `{reqId, status: 0, error: 'switch_locked'}` /
+ * `{reqId, status: 0, error: 'min_off_time', retryAfterSeconds}` when the
+ * safety guard refuses a channel-state command.
+ *
+ * Returns the device-facing reqId (null when offline) — synchronously for
+ * non-actuation commands, as a Promise for channel-state commands (the
+ * guard check is async).
+ */
+export function relayToDevice(deviceId, { method, path, body }, clientWs, clientReqId) {
+  const sendOffline = () => {
+    clientWs?.send(JSON.stringify({ reqId: clientReqId, status: 0, error: 'device_offline' }));
+    return null;
+  };
+  if (!isSocketOpen(deviceId)) {
+    return sendOffline();
+  }
+  if (!channelCommandTarget({ method, path, body })) {
+    const promise = sendRelay(deviceId, { method, path, body });
+    return promise ? pipeToClient(promise, clientWs, clientReqId) : sendOffline();
+  }
+  return guardChannelCommand(deviceId, { method, path, body })
+    .then((block) => {
+      if (block) {
+        clientWs?.send(JSON.stringify({ reqId: clientReqId, status: 0, ...block }));
+        return null;
+      }
+      const promise = sendRelay(deviceId, { method, path, body });
+      return promise ? pipeToClient(promise, clientWs, clientReqId) : sendOffline();
+    })
+    .catch((err) => {
+      console.error(`safety guard check failed for ${deviceId} ${path}`, err);
+      clientWs?.send(JSON.stringify({ reqId: clientReqId, status: 0, error: 'internal_error' }));
+      return null;
+    });
 }
 
 /**

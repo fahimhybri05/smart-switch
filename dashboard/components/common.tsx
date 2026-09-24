@@ -230,19 +230,29 @@ export function ConfirmAction({
   confirmLabel = 'Confirm',
   destructive = true,
   onConfirm,
+  open: controlledOpen,
+  onOpenChange,
 }: {
-  trigger: ReactNode;
+  /** Omit when opening it programmatically via `open`/`onOpenChange` (e.g. from a menu item). */
+  trigger?: ReactNode;
   title: string;
   description: ReactNode;
   confirmLabel?: string;
   destructive?: boolean;
   onConfirm: () => Promise<unknown> | void;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = (o: boolean) => {
+    if (controlledOpen === undefined) setUncontrolledOpen(o);
+    onOpenChange?.(o);
+  };
   const [busy, setBusy] = useState(false);
   return (
     <AlertDialog open={open} onOpenChange={(o) => !busy && setOpen(o)}>
-      <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>
+      {trigger && <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>}
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>

@@ -29,6 +29,10 @@ export interface DeviceChannel {
   zone: string | null;
   state: string | null;
   updatedAt: string | null;
+  /** Switch lock (device_switches.locked_at set) — remote commands are refused. */
+  locked?: boolean;
+  /** When the channel last actually changed state (ISO), if known. */
+  stateSince?: string | null;
 }
 
 /** GET /devices → { devices: Device[] } (also the WS `snapshot` payload). */
@@ -39,9 +43,9 @@ export interface Device {
   last_seen_at: string | null;
   channels: DeviceChannel[];
   /**
-   * NOT returned by the backend today (getHouseholdDevicesSnapshot doesn't
-   * select it). When present, the overview filters devices by the selected
-   * household; when absent, all devices are shown.
+   * Selected by getHouseholdDevicesSnapshot (GET /devices and the WS
+   * snapshot). Pages filter devices by the selected household when present;
+   * when absent, all devices are shown.
    */
   household_id?: number | null;
 }
@@ -57,18 +61,62 @@ export interface SwitchConfig {
   default_boot_state: ChannelState;
   input_mode: InputMode;
   inching_ms: number;
+  /** Rated power draw; enables kWh estimates. null = unknown. */
+  watts: number | null;
+  /** Safety: auto-OFF after this long ON. null = off. */
+  max_on_s: number | null;
+  /** Safety: must stay OFF this long before a new ON. null = off. */
+  min_off_s: number | null;
+  /** Remote control blocked (app, schedules, automations, scenes, API, groups). */
+  locked: boolean;
+  locked_at: string | null;
 }
 
+export type ScheduleType = 'once' | 'daily' | 'weekly' | 'countdown' | 'sunrise' | 'sunset';
+
+/**
+ * One device schedule — backend/src/deviceApi/schedules.js rowToScheduleWire
+ * (same shape as the app's Schedule.fromJson). Optional fields are present
+ * only when meaningful for `type`: time for once/daily/weekly, days for
+ * weekly, duration_s for countdown, solar_offset_min for sunrise/sunset.
+ */
 export interface Schedule {
-  id: string | number;
+  id: string;
   channel_idx: number;
   action: ChannelState;
-  type: 'once' | 'daily' | 'weekly' | 'countdown' | 'sunrise' | 'sunset' | string;
+  type: ScheduleType;
+  enabled: boolean;
+  /** "HH:MM" in the device's local time (DeviceConfig.utc_offset_min). */
+  time?: string;
+  /** 1=Mon..7=Sun. */
+  days?: number[];
+  duration_s?: number;
+  solar_offset_min?: number;
+}
+
+/**
+ * POST /devices/:id/schedules body. No `id` creates (backend assigns
+ * "s-<n>"); an existing `id` updates (404 if unknown — not an upsert by
+ * caller-chosen id). Countdowns arm on create and on a disabled→enabled edit.
+ */
+export interface ScheduleInput {
+  id?: string;
+  channel_idx: number;
+  action: ChannelState;
+  type: ScheduleType;
   enabled: boolean;
   time?: string;
   days?: number[];
   duration_s?: number;
   solar_offset_min?: number;
+}
+
+/** PATCH /devices/:id/settings response (setSettings). */
+export interface DeviceSettings {
+  interlock_enabled: boolean;
+  latitude: number | null;
+  longitude: number | null;
+  location_set: boolean;
 }
 
 /** GET /devices/:id/config — backend/src/deviceApi/info.js getConfig(). */
@@ -97,6 +145,13 @@ export interface SwitchPatch {
   defaultBootState?: ChannelState;
   inputMode?: InputMode;
   inchingMs?: number;
+  /** null clears. */
+  watts?: number | null;
+  /** null clears (no max run time). */
+  maxOnSeconds?: number | null;
+  /** null clears (no min off time). */
+  minOffSeconds?: number | null;
+  locked?: boolean;
 }
 
 /** POST /devices/:id/command response: the device's own {status, body}. */
@@ -117,6 +172,8 @@ export interface SwitchView {
   state: ChannelState | null;
   online: boolean;
   updatedAt: string | null;
+  /** From the /devices snapshot channel, falling back to the switch config. */
+  locked: boolean;
   config: SwitchConfig | null;
 }
 
@@ -154,6 +211,141 @@ export interface OutgoingInvite {
   invitedByEmail: string | null;
 }
 
+/* --------------------------------- Groups -------------------------------- */
+
+/** One switch reference inside a group (or an automation). */
+export interface SwitchRef {
+  deviceId: string;
+  channelIdx: number;
+}
+
+/** GET /groups → { groups: Group[] } (backend/src/routes/groups.js). */
+export interface Group {
+  id: number;
+  /** Returned by the backend since the dashboard groups page; null on older backends. */
+  householdId: number | null;
+  name: string;
+  members: SwitchRef[];
+}
+
+/** POST /groups body: no `id` creates, `id` replaces name + the full member list. */
+export interface GroupInput {
+  id?: number;
+  householdId?: number;
+  name: string;
+  members: SwitchRef[];
+}
+
+/* ------------------------------ Automations ------------------------------ */
+
+export type AutomationTrigger =
+  /** Household-local time (households.timezone) on each of `days` (1=Mon..7=Sun). */
+  | { type: 'schedule'; days: number[]; time: string }
+  /** Fires when that channel changes to `state`. */
+  | { type: 'state'; deviceId: string; channelIdx: number; state: ChannelState };
+
+export interface AutomationAction extends SwitchRef {
+  state: ChannelState;
+}
+
+/** GET /automations → { automations: Automation[] } (routes/automations.js rowToAutomation). */
+export interface Automation {
+  id: number;
+  householdId: number;
+  name: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  actions: AutomationAction[];
+  lastFiredAt: string | null;
+}
+
+/** POST /automations body — owner-only; no `id` creates, `id` replaces the whole rule. */
+export interface AutomationInput {
+  id?: number;
+  householdId?: number;
+  name: string;
+  enabled: boolean;
+  trigger: AutomationTrigger;
+  actions: AutomationAction[];
+}
+
+/* --------------------------------- Scenes -------------------------------- */
+
+/** Icon keys the app and the dashboard agree on (free text on the wire). */
+export type SceneIcon = 'moon' | 'sun' | 'home' | 'away' | 'movie' | 'power' | 'leaf' | 'droplet';
+
+export type SceneAction = AutomationAction;
+
+/** GET /scenes → { scenes: Scene[] } */
+export interface Scene {
+  id: number;
+  householdId: number | null;
+  name: string;
+  /** One of SceneIcon, or any other string from a newer client (rendered as a fallback). */
+  icon: string | null;
+  actions: SceneAction[];
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** POST /scenes body — upsert like groups (no `id` creates). Max 64 actions. */
+export interface SceneInput {
+  id?: number;
+  householdId?: number;
+  name: string;
+  icon?: string | null;
+  actions: SceneAction[];
+}
+
+/** One action's outcome in POST /scenes/:id/run. */
+export interface SceneRunResultItem extends SceneAction {
+  ok: boolean;
+  /** Machine code (switch_locked, min_off_time, device_offline, …). */
+  error?: string | null;
+  retryAfterSeconds?: number | null;
+}
+
+/** POST /scenes/:id/run */
+export interface SceneRunResult {
+  results: SceneRunResultItem[];
+  succeeded: number;
+  failed: number;
+}
+
+/* ---------------------------------- Usage -------------------------------- */
+
+export interface SwitchUsage {
+  channelIdx: number;
+  name: string;
+  watts: number | null;
+  /** Seconds ON per entry of `days`. */
+  dailyOnSeconds: number[];
+  totalOnSeconds: number;
+  /** null when watts isn't set. */
+  kwh: number | null;
+}
+
+/** GET /devices/:id/usage?days= */
+export interface DeviceUsage {
+  timezone: string;
+  /** "YYYY-MM-DD" in the household timezone, oldest first. */
+  days: string[];
+  switches: SwitchUsage[];
+}
+
+export interface HouseholdSwitchUsage extends SwitchUsage {
+  deviceId: string;
+  deviceName: string;
+}
+
+/** GET /usage?householdId=&days= */
+export interface HouseholdUsage {
+  timezone: string;
+  days: string[];
+  switches: HouseholdSwitchUsage[];
+  totals: { onSeconds: number; kwh: number | null };
+}
+
 /* -------------------------------- Activity ------------------------------- */
 
 export type ActivitySource =
@@ -166,6 +358,7 @@ export type ActivitySource =
   | 'api'
   | 'hook'
   | 'dashboard'
+  | 'safety'
   | (string & {});
 
 export interface ActivityEntry {

@@ -35,6 +35,8 @@ object WidgetRender {
         return when {
             "led" in n || "strip" in n -> R.drawable.ic_widget_strip
             "fish" in n || "tank" in n || "aquarium" in n -> R.drawable.ic_widget_aquarium
+            "pump" in n || "water" in n -> R.drawable.ic_widget_pump
+            "motor" in n -> R.drawable.ic_widget_motor
             "fan" in n -> R.drawable.ic_widget_fan
             "multi" in n || "power strip" in n -> R.drawable.ic_widget_socket
             "tv" in n || "television" in n -> R.drawable.ic_widget_tv

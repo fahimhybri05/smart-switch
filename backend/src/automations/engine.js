@@ -1,4 +1,5 @@
 import { pool } from '../db/pool.js';
+import { isGuardError } from '../safety/guard.js';
 import { noteExpectedStateChange } from '../ws/attribution.js';
 import { relayCommand } from '../ws/registry.js';
 
@@ -81,6 +82,14 @@ export async function fireAutomation(automation, { depth = 0, chainAutomationIds
     try {
       await relay();
     } catch (firstErr) {
+      // A switch lock / min-off refusal (safety/guard.js, enforced inside
+      // relayCommand) is a rule, not a transient failure — no retry.
+      if (isGuardError(firstErr)) {
+        console.warn(
+          `automation ${automation.id} action refused for ${action.deviceId} ch${action.channelIdx}: ${firstErr.code}`,
+        );
+        continue;
+      }
       await sleep(RELAY_RETRY_DELAY_MS);
       // Re-note the attribution — the first attempt's entry may already
       // have expired or been consumed by the time this retry's own

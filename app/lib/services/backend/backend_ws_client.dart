@@ -4,12 +4,18 @@ import 'dart:math';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../api_error_body.dart';
 import '../device_transport.dart';
 
 class CloudRelayException implements Exception {
-  CloudRelayException(this.message);
+  CloudRelayException(this.message, {this.retryAfterSeconds});
 
+  /// The relay's `error` string — a backend error code such as
+  /// [CommandErrorCodes.switchLocked], or a transport-level description.
   final String message;
+
+  /// See `DeviceApiException.retryAfterSeconds`.
+  final int? retryAfterSeconds;
 
   @override
   String toString() => message;
@@ -165,8 +171,14 @@ class BackendWsClient {
 
     final status = msg['status'] as int? ?? 0;
     if (status == 0) {
+      // `{reqId, status: 0, error, retryAfterSeconds?}` — the backend
+      // rejected (or couldn't relay) the command itself.
+      final error = ApiErrorBody.parse(msg);
       completer.completeError(
-        CloudRelayException(msg['error'] as String? ?? 'cloud_relay_error'),
+        CloudRelayException(
+          error.code ?? 'cloud_relay_error',
+          retryAfterSeconds: error.retryAfterSeconds,
+        ),
       );
     } else {
       completer.complete(

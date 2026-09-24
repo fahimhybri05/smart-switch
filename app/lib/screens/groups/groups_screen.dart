@@ -13,6 +13,7 @@ import '../../theme/spacing.dart';
 import '../shared/device_sync_gate.dart';
 import '../shared/empty_state_view.dart';
 import '../shared/device_visualization.dart';
+import '../shared/lock_badge.dart';
 
 class GroupsScreen extends ConsumerWidget {
   const GroupsScreen({super.key});
@@ -110,12 +111,25 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
     return null;
   }
 
+  /// Whether [member] is locked, per its device's already-loaded config
+  /// (the same `deviceConfigProvider` the tiles read). Unknown = unlocked;
+  /// the backend still enforces the lock either way.
+  bool _isLocked(KnownDevice device, GroupMember member) {
+    final config = ref.read(deviceConfigProvider(device)).asData?.value;
+    if (config == null) return false;
+    for (final sw in config.switches) {
+      if (sw.channelIdx == member.channelIdx) return sw.locked;
+    }
+    return false;
+  }
+
   Future<void> _toggleAll(BuildContext context, WidgetRef ref, bool on) async {
     HapticFeedback.mediumImpact();
     final desired = on ? ChannelPowerState.on : ChannelPowerState.off;
     final overrideNotifier = ref.read(channelOverrideProvider.notifier);
     final touchedDevices = <KnownDevice>{};
     var failureCount = 0;
+    var lockedCount = 0;
 
     // Fire every member's command in parallel (was a sequential await-in-a-
     // for-loop — N members paid N round-trips serially, which is what made
@@ -130,6 +144,12 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
         final device = _deviceFor(member.deviceId);
         if (device == null) {
           failureCount++;
+          return;
+        }
+        // Locked members are skipped rather than sent (the backend would
+        // reject them with switch_locked anyway) and reported below.
+        if (_isLocked(device, member)) {
+          lockedCount++;
           return;
         }
         touchedDevices.add(device);
@@ -147,13 +167,19 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
       ref.invalidate(channelStatesProvider(device));
     }
 
-    if (failureCount > 0 && context.mounted) {
+    if ((failureCount > 0 || lockedCount > 0) && context.mounted) {
       final total = group.members.length;
-      final succeeded = total - failureCount;
+      final succeeded = total - failureCount - lockedCount;
+      final parts = [
+        if (lockedCount > 0) '$lockedCount locked',
+        if (failureCount > 0) '$failureCount failed',
+      ];
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '$succeeded of $total switches updated — $failureCount failed',
+            lockedCount == total
+                ? 'Every switch in this group is locked'
+                : '$succeeded of $total switches updated — ${parts.join(', ')}',
           ),
         ),
       );
@@ -211,6 +237,7 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
     var anyOn = false;
     var anyLoading = false;
     var anyOffline = false;
+    var lockedCount = 0;
 
     for (final member in group.members) {
       final device = _deviceFor(member.deviceId);
@@ -218,6 +245,15 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
         allOn = false;
         anyOffline = true;
         continue;
+      }
+      // Watched (not just read) so the lock badge updates after a
+      // switch's settings are saved elsewhere.
+      final memberConfig = ref.watch(deviceConfigProvider(device)).asData?.value;
+      if (memberConfig != null &&
+          memberConfig.switches.any(
+            (sw) => sw.channelIdx == member.channelIdx && sw.locked,
+          )) {
+        lockedCount++;
       }
       final override = ref.watch(channelOverrideProvider)[
         (device.deviceId, member.channelIdx)
@@ -331,6 +367,10 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                if (lockedCount > 0) ...[
+                  const SizedBox(width: Spacing.xs),
+                  SwitchLockBadge(label: '$lockedCount locked'),
+                ],
               ],
             ),
           ),

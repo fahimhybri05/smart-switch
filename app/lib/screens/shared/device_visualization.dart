@@ -46,7 +46,9 @@ class _DeviceVisualizationState extends State<DeviceVisualization>
   bool get _animates =>
       widget.state == DeviceVisualState.on &&
       (widget.kind == DeviceVisualKind.fan ||
-          widget.kind == DeviceVisualKind.light);
+          widget.kind == DeviceVisualKind.light ||
+          widget.kind == DeviceVisualKind.pump ||
+          widget.kind == DeviceVisualKind.motor);
 
   void _syncPulse() {
     if (_animates) {
@@ -160,6 +162,8 @@ enum DeviceVisualKind {
   multiPlug('Multi-plug'),
   tv('Television'),
   router('Router'),
+  pump('Water pump'),
+  motor('Motor'),
   appliance('Smart appliance');
 
   const DeviceVisualKind(this.label);
@@ -174,6 +178,8 @@ enum DeviceVisualKind {
         value.contains('aquarium')) {
       return fishTank;
     }
+    if (value.contains('pump') || value.contains('water')) return pump;
+    if (value.contains('motor')) return motor;
     if (value.contains('fan')) return fan;
     if (value.contains('multi') || value.contains('power strip')) {
       return multiPlug;
@@ -302,6 +308,10 @@ class _DevicePainter extends CustomPainter {
         _paintTv(canvas, plate, opacity);
       case DeviceVisualKind.router:
         _paintRouter(canvas, plate, opacity);
+      case DeviceVisualKind.pump:
+        _paintPump(canvas, plate, opacity);
+      case DeviceVisualKind.motor:
+        _paintMotor(canvas, plate, opacity);
       case DeviceVisualKind.appliance:
         _paintAppliance(canvas, plate, opacity);
     }
@@ -886,6 +896,167 @@ class _DevicePainter extends CustomPainter {
         ..color = const Color(0xFF7E8887)
         ..strokeWidth = 3,
     );
+  }
+
+  void _paintPump(Canvas canvas, Rect plate, double opacity) {
+    final isOn = progress > 0.45;
+    final center = plate.center.translate(
+      -plate.width * 0.06,
+      plate.height * 0.07,
+    );
+    final r = plate.width * 0.19;
+    final stroke = Paint()
+      ..color = const Color(0xFF9BA4A3).withValues(alpha: opacity)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    final body = Paint()..color = const Color(0xFFF4F7F6);
+
+    // Outlet pipe rising from the volute, then the volute and base.
+    final pipe = RRect.fromRectAndRadius(
+      Rect.fromLTWH(
+        center.dx + r * 0.3,
+        center.dy - r * 1.7,
+        r * 0.55,
+        r * 1.2,
+      ),
+      const Radius.circular(3),
+    );
+    canvas.drawRRect(pipe, body);
+    canvas.drawRRect(pipe, stroke);
+    canvas.drawCircle(center, r, body);
+    canvas.drawCircle(center, r, stroke);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(
+          center: Offset(center.dx, center.dy + r + 5),
+          width: r * 2.4,
+          height: 6,
+        ),
+        const Radius.circular(3),
+      ),
+      Paint()..color = const Color(0xFF9BA4A3).withValues(alpha: opacity),
+    );
+
+    // Impeller — spins while ON (pulse only runs when ON).
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(pulse.value * math.pi * 2);
+    final vane = Paint()
+      ..color = isOn ? accent : const Color(0xFF8B9392)
+      ..strokeWidth = 2.4
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < 5; i++) {
+      canvas.rotate(math.pi * 2 / 5);
+      canvas.drawLine(Offset.zero, Offset(r * 0.62, 0), vane);
+    }
+    canvas.restore();
+    canvas.drawCircle(
+      center,
+      3.5,
+      Paint()..color = isOn ? accent : const Color(0xFF828B8A),
+    );
+
+    // Water drop at the outlet — rises and fades while pumping.
+    final dropX = pipe.center.dx;
+    final dy = pipe.top - 7 - (isOn ? pulse.value * 6 : 0);
+    final drop = Path()
+      ..moveTo(dropX, dy - 5)
+      ..quadraticBezierTo(dropX + 5, dy + 1, dropX, dy + 4)
+      ..quadraticBezierTo(dropX - 5, dy + 1, dropX, dy - 5)
+      ..close();
+    canvas.drawPath(
+      drop,
+      Paint()
+        ..color = isOn
+            ? const Color(
+                0xFF4FA3E0,
+              ).withValues(alpha: opacity * (1 - pulse.value * 0.6))
+            : const Color(0xFFB8C1C0).withValues(alpha: opacity),
+    );
+  }
+
+  void _paintMotor(Canvas canvas, Rect plate, double opacity) {
+    final isOn = progress > 0.45;
+    final stroke = Paint()
+      ..color = const Color(0xFF9BA4A3).withValues(alpha: opacity)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    final bodyRect = Rect.fromCenter(
+      center: plate.center.translate(-plate.width * 0.06, 3),
+      width: plate.width * 0.46,
+      height: plate.height * 0.32,
+    );
+    final body = RRect.fromRectAndRadius(bodyRect, const Radius.circular(8));
+
+    // Feet, body, cooling fins.
+    final foot = Paint()
+      ..color = const Color(0xFF9BA4A3).withValues(alpha: opacity);
+    for (final x in [bodyRect.left + 8, bodyRect.right - 20]) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(x, bodyRect.bottom - 1, 12, 6),
+          const Radius.circular(2),
+        ),
+        foot,
+      );
+    }
+    canvas.drawRRect(body, Paint()..color = const Color(0xFFF4F7F6));
+    canvas.drawRRect(body, stroke);
+    final fin = Paint()
+      ..color = const Color(0xFFB8C1C0).withValues(alpha: opacity)
+      ..strokeWidth = 1.6;
+    for (var i = 1; i <= 4; i++) {
+      final x = bodyRect.left + bodyRect.width * i / 5;
+      canvas.drawLine(
+        Offset(x, bodyRect.top + 5),
+        Offset(x, bodyRect.bottom - 5),
+        fin,
+      );
+    }
+
+    // Terminal box with the power LED.
+    final box = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: Offset(bodyRect.center.dx, bodyRect.top - 5),
+        width: 18,
+        height: 10,
+      ),
+      const Radius.circular(3),
+    );
+    canvas.drawRRect(box, Paint()..color = const Color(0xFFF4F7F6));
+    canvas.drawRRect(box, stroke);
+    canvas.drawCircle(
+      box.center,
+      2.2,
+      Paint()..color = isOn ? accent : const Color(0xFF8B9392),
+    );
+
+    // Shaft + spinning rotor end.
+    final shaftY = bodyRect.center.dy;
+    canvas.drawLine(
+      Offset(bodyRect.right, shaftY),
+      Offset(bodyRect.right + 14, shaftY),
+      Paint()
+        ..color = const Color(0xFF7B8584).withValues(alpha: opacity)
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round,
+    );
+    final hub = Offset(bodyRect.right + 14, shaftY);
+    final hubR = bodyRect.height * 0.3;
+    canvas.drawCircle(hub, hubR, Paint()..color = const Color(0xFFF4F7F6));
+    canvas.drawCircle(hub, hubR, stroke);
+    canvas.save();
+    canvas.translate(hub.dx, hub.dy);
+    canvas.rotate(pulse.value * math.pi * 2);
+    final spoke = Paint()
+      ..color = isOn ? accent : const Color(0xFF8B9392)
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < 3; i++) {
+      canvas.rotate(math.pi * 2 / 3);
+      canvas.drawLine(Offset.zero, Offset(hubR * 0.8, 0), spoke);
+    }
+    canvas.restore();
   }
 
   void _paintRouter(Canvas canvas, Rect plate, double opacity) {

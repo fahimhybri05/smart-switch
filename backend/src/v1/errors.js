@@ -4,8 +4,11 @@ import { SwitchError } from '../switches.js';
  * The one error shape of the public API: `{ error: { code, message } }`.
  * Internal routes keep their existing `{ error: '...' }` shape.
  */
-export function sendError(res, status, code, message) {
-  return res.status(status).json({ error: { code, message } });
+export function sendError(res, status, code, message, extra = {}) {
+  if (extra.retryAfterSeconds !== undefined) {
+    res.set('Retry-After', String(extra.retryAfterSeconds));
+  }
+  return res.status(status).json({ error: { code, message, ...extra } });
 }
 
 export class ApiError extends Error {
@@ -34,8 +37,11 @@ export function v1ErrorHandler(err, req, res, next) {
   if (res.headersSent) {
     return next(err);
   }
-  if (err instanceof ApiError || err instanceof SwitchError) {
+  if (err instanceof ApiError) {
     return sendError(res, err.status, err.code, err.message);
+  }
+  if (err instanceof SwitchError) {
+    return sendError(res, err.status, err.code, err.message, err.extra);
   }
   if (err?.type === 'entity.parse.failed') {
     return sendError(res, 400, 'invalid_json', 'Request body is not valid JSON.');

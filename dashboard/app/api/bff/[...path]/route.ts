@@ -19,6 +19,8 @@ const ALLOWED: RegExp[] = [
   /^activity$/,
   /^groups(\/.*)?$/,
   /^automations(\/.*)?$/,
+  /^scenes(\/.*)?$/,
+  /^usage$/,
   /^api-keys(\/.*)?$/,
   /^hooks(\/.*)?$/,
   // Admin console — the backend re-checks is_admin on every request.

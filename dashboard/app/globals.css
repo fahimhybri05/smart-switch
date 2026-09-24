@@ -4,6 +4,13 @@
 
 @layer base {
   :root {
+    /* Switch artwork (components/device-visual.tsx) — the app's panel palette */
+    --sc-plate-hi: #f6f8fa;
+    --sc-plate-lo: #dde1e6;
+    --sc-plate-edge: rgba(255, 255, 255, 0.7);
+    --sc-paddle: #ffffff;
+    --sc-screw: #9aa0a6;
+    --sc-glyph-off: #e9edef;
     /* Light theme */
     --background: 216 33% 97%;
     --foreground: 219 42% 11%;
@@ -33,6 +40,12 @@
   }
 
   .dark {
+    --sc-plate-hi: #2a2e35;
+    --sc-plate-lo: #1c1f25;
+    --sc-plate-edge: rgba(255, 255, 255, 0.08);
+    --sc-paddle: #343942;
+    --sc-screw: #6b7280;
+    --sc-glyph-off: #2d3239;
     /* Dark theme — navy #101827 */
     --background: 219 42% 11%;
     --foreground: 210 40% 96%;
@@ -95,5 +108,76 @@
 
   .code-block {
     @apply overflow-x-auto rounded-lg border bg-muted/60 p-4 font-mono text-[13px] leading-relaxed;
+  }
+}
+
+/* Device artwork motion: fans spin, glows breathe (ON only). */
+@keyframes sc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes sc-breathe {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.sc-spin {
+  animation: sc-spin 1.2s linear infinite;
+}
+.sc-breathe {
+  animation: sc-breathe 2.4s ease-in-out infinite;
+}
+@keyframes sc-rise {
+  0% {
+    transform: translateY(2px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-6px);
+    opacity: 0.2;
+  }
+}
+.sc-rise {
+  animation: sc-rise 1.2s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-spin,
+  .sc-breathe,
+  .sc-rise {
+    animation: none;
+  }
+}
+
+/* Usage charts (components/usage/*): categorical series in fixed order,
+   validated for CVD/contrast on the card surface in both themes. Slot 9 is
+   the neutral "Other" bucket. */
+@layer base {
+  :root {
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-7: #4a3aa7;
+    --series-8: #e34948;
+    --series-other: #a3a9b3;
+  }
+
+  .dark {
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --series-other: #5b6472;
   }
 }

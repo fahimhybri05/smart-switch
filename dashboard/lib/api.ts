@@ -14,6 +14,10 @@ import type {
   AdminUser,
   AdminUserDetail,
   AuditEntry,
+  Automation,
+  AutomationAction,
+  AutomationInput,
+  AutomationTrigger,
   CursorPage,
   Paged,
   ApiKey,
@@ -22,15 +26,31 @@ import type {
   CreatedApiKey,
   CreatedHook,
   Device,
+  DeviceChannel,
   DeviceConfig,
+  DeviceSettings,
+  DeviceUsage,
+  Group,
+  GroupInput,
   Hook,
   Household,
+  HouseholdSwitchUsage,
+  HouseholdUsage,
   IncomingInvite,
   Me,
   OutgoingInvite,
   Role,
+  Scene,
+  SceneAction,
+  SceneInput,
+  SceneRunResult,
+  Schedule,
+  ScheduleInput,
+  ScheduleType,
   SwitchConfig,
   SwitchPatch,
+  SwitchRef,
+  SwitchUsage,
 } from './types';
 
 /* --------------------------------------------------------------------- */
@@ -57,12 +77,35 @@ const CODE_MESSAGES: Record<string, string> = {
   backend_unavailable: "Can't reach the Smart Control server right now.",
   'bad origin': 'Request blocked (bad origin).',
   'missing request header': 'Request blocked.',
+  switch_locked: 'This switch is locked',
+  min_off_time: 'Protection: wait before turning it on again',
 };
+
+/** "Protection: wait N min before turning it on again" (N rounded up, at least 1). */
+export function minOffMessage(retryAfterSeconds: unknown): string {
+  const s = Number(retryAfterSeconds);
+  if (!Number.isFinite(s) || s <= 0) return CODE_MESSAGES.min_off_time;
+  return `Protection: wait ${Math.max(1, Math.ceil(s / 60))} min before turning it on again`;
+}
+
+/**
+ * Human text for a backend machine code — also used for per-item codes that
+ * come back inside a 200 (e.g. POST /scenes/:id/run results).
+ */
+export function codeMessage(code: string | null | undefined, retryAfterSeconds?: unknown): string {
+  if (!code) return 'Failed';
+  if (code === 'min_off_time') return minOffMessage(retryAfterSeconds);
+  return CODE_MESSAGES[code] ?? code.charAt(0).toUpperCase() + code.slice(1).replace(/_/g, ' ');
+}
 
 function extractError(status: number, body: unknown): ApiError {
   const raw = (body as { error?: unknown } | null)?.error;
   let code: string | null = null;
   let message: string;
+  // retryAfterSeconds sits beside `error` on REST, inside it on /v1-style bodies.
+  const retryAfter =
+    (body as { retryAfterSeconds?: unknown } | null)?.retryAfterSeconds ??
+    (raw && typeof raw === 'object' ? (raw as { retryAfterSeconds?: unknown }).retryAfterSeconds : undefined);
   if (typeof raw === 'string') {
     code = raw;
     message = CODE_MESSAGES[raw] ?? raw.charAt(0).toUpperCase() + raw.slice(1);
@@ -80,6 +123,9 @@ function extractError(status: number, body: unknown): ApiError {
           ? 'Something went wrong on the server.'
           : `Request failed (${status}).`;
   }
+  // Our own wording wins for the safety codes, whatever the backend's message says.
+  if (code === 'switch_locked') message = CODE_MESSAGES.switch_locked;
+  if (code === 'min_off_time') message = minOffMessage(retryAfter);
   if (status === 429 && !code) code = 'rate_limited';
   return new ApiError(message, status, code, body);
 }
@@ -178,7 +224,37 @@ function normalizeSwitchConfig(raw: Loose): SwitchConfig {
     default_boot_state: (raw.default_boot_state ?? raw.defaultBootState) === 'ON' ? 'ON' : 'OFF',
     input_mode: ((raw.input_mode ?? raw.inputMode) as SwitchConfig['input_mode']) ?? 'DISABLED',
     inching_ms: num(raw.inching_ms ?? raw.inchingMs ?? 0) || 0,
+    watts: optNum(raw.watts),
+    max_on_s: optNum(raw.max_on_s ?? raw.maxOnSeconds),
+    min_off_s: optNum(raw.min_off_s ?? raw.minOffSeconds),
+    locked: raw.locked === true || (raw.locked == null && (raw.locked_at ?? raw.lockedAt) != null),
+    locked_at: str(raw.locked_at ?? raw.lockedAt),
   };
+}
+
+/** Positive-or-zero number, or null for null/undefined/garbage. */
+function optNum(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+const SCHEDULE_TYPES: ScheduleType[] = ['once', 'daily', 'weekly', 'countdown', 'sunrise', 'sunset'];
+
+function normalizeSchedule(raw: Loose): Schedule {
+  const type = SCHEDULE_TYPES.includes(raw.type as ScheduleType) ? (raw.type as ScheduleType) : 'once';
+  const s: Schedule = {
+    id: str(raw.id) ?? '',
+    channel_idx: num(raw.channel_idx ?? raw.channelIdx),
+    action: raw.action === 'ON' ? 'ON' : 'OFF',
+    type,
+    enabled: raw.enabled !== false,
+  };
+  if (typeof raw.time === 'string') s.time = raw.time.slice(0, 5);
+  if (Array.isArray(raw.days)) s.days = (raw.days as unknown[]).map(num).filter((d) => d >= 1 && d <= 7);
+  if (raw.duration_s != null) s.duration_s = num(raw.duration_s);
+  if (raw.solar_offset_min != null) s.solar_offset_min = num(raw.solar_offset_min);
+  return s;
 }
 
 function normalizeConfig(raw: unknown): DeviceConfig {
@@ -186,8 +262,10 @@ function normalizeConfig(raw: unknown): DeviceConfig {
   const switches = Array.isArray(o.switches) ? (o.switches as Loose[]).map(normalizeSwitchConfig) : [];
   return {
     ...(o as unknown as DeviceConfig),
+    utc_offset_min: num(o.utc_offset_min ?? 0) || 0,
+    location_set: o.location_set === true,
     switches: switches.sort((a, b) => a.channel_idx - b.channel_idx),
-    schedules: Array.isArray(o.schedules) ? (o.schedules as DeviceConfig['schedules']) : [],
+    schedules: Array.isArray(o.schedules) ? (o.schedules as Loose[]).map(normalizeSchedule) : [],
   };
 }
 
@@ -201,13 +279,22 @@ function normalizeOutgoingInvite(raw: Loose): OutgoingInvite {
   };
 }
 
+function normalizeChannel(raw: Loose): DeviceChannel {
+  const ch = { ...(raw as unknown as DeviceChannel) };
+  // Keep `locked` undefined when an older backend omits it, so the switch config can decide.
+  if (raw.locked != null) ch.locked = raw.locked === true;
+  const since = raw.stateSince ?? raw.state_since;
+  if (since !== undefined) ch.stateSince = str(since);
+  return ch;
+}
+
 function normalizeDevice(raw: Loose): Device {
   return {
     device_id: str(raw.device_id ?? raw.deviceId) ?? '',
     friendly_name: str(raw.friendly_name ?? raw.friendlyName),
     is_online: Boolean(raw.is_online ?? raw.isOnline ?? raw.online),
     last_seen_at: str(raw.last_seen_at ?? raw.lastSeenAt),
-    channels: Array.isArray(raw.channels) ? (raw.channels as Device['channels']) : [],
+    channels: Array.isArray(raw.channels) ? (raw.channels as Loose[]).map(normalizeChannel) : [],
     household_id:
       raw.household_id != null || raw.householdId != null
         ? num(raw.household_id ?? raw.householdId)
@@ -277,10 +364,38 @@ export const devicesApi = {
     request<unknown>(bff(`devices/${enc(deviceId)}`), { method: 'PATCH', body: { friendlyName } }),
   remove: (deviceId: string) =>
     request<null>(bff(`devices/${enc(deviceId)}`), { method: 'DELETE' }),
-  patchSwitch: (deviceId: string, channelIdx: number, patch: SwitchPatch) =>
-    request<unknown>(bff(`devices/${enc(deviceId)}/switches/${channelIdx}`), {
+  /** Partial switch update; resolves to the saved switch row (null if the body wasn't a row). */
+  patchSwitch: async (deviceId: string, channelIdx: number, patch: SwitchPatch): Promise<SwitchConfig | null> => {
+    const raw = await request<Loose | null>(bff(`devices/${enc(deviceId)}/switches/${channelIdx}`), {
       method: 'PATCH',
       body: patch,
+    });
+    const row = (raw?.switch ?? raw) as Loose | null;
+    return row && typeof row === 'object' && (row.channel_idx != null || row.channelIdx != null)
+      ? normalizeSwitchConfig(row)
+      : null;
+  },
+  /** Per-switch daily on-time for the last `days` days (1..90). */
+  usage: async (deviceId: string, days: number): Promise<DeviceUsage> => {
+    const raw = (await request<Loose>(`${bff(`devices/${enc(deviceId)}/usage`)}?days=${days}`)) ?? {};
+    return {
+      timezone: str(raw.timezone) ?? 'UTC',
+      days: Array.isArray(raw.days) ? (raw.days as unknown[]).map((d) => String(d)) : [],
+      switches: listOf(raw, 'switches').map(normalizeSwitchUsage),
+    };
+  },
+  /** Create (no `id`) or update (`id`) a schedule; resolves to the saved schedule. */
+  upsertSchedule: async (deviceId: string, input: ScheduleInput) =>
+    normalizeSchedule(
+      (await request<Loose>(bff(`devices/${enc(deviceId)}/schedules`), { method: 'POST', body: input })) ?? {},
+    ),
+  deleteSchedule: (deviceId: string, scheduleId: string) =>
+    request<null>(bff(`devices/${enc(deviceId)}/schedules/${enc(scheduleId)}`), { method: 'DELETE' }),
+  /** Sets the device's location (needed by sunrise/sunset schedules). Never touches interlock. */
+  setLocation: (deviceId: string, latitude: number, longitude: number) =>
+    request<DeviceSettings>(bff(`devices/${enc(deviceId)}/settings`), {
+      method: 'PATCH',
+      body: { latitude, longitude },
     }),
   /** Actuates one channel through the relay endpoint. Throws ApiError on 503/504 or a device-side error. */
   setChannelState: async (deviceId: string, channelIdx: number, state: ChannelState) => {
@@ -308,6 +423,9 @@ export const householdsApi = {
   list: async () => (await request<{ households: Household[] }>(bff('households'))).households ?? [],
   rename: (id: number, name: string) =>
     request<unknown>(bff(`households/${id}`), { method: 'PATCH', body: { name } }),
+  /** IANA timezone automations' schedule triggers are evaluated in (owner-only). */
+  setTimezone: (id: number, timezone: string) =>
+    request<unknown>(bff(`households/${id}`), { method: 'PATCH', body: { timezone } }),
   invite: (id: number, email: string) =>
     request<unknown>(bff(`households/${id}/invite`), { method: 'POST', body: { email } }),
   outgoingInvites: async (id: number) =>
@@ -323,6 +441,142 @@ export const householdsApi = {
   /** Owner removing a member, or a member removing themselves (leave). */
   removeMember: (id: number, userId: number) =>
     request<null>(bff(`households/${id}/members/${userId}`), { method: 'DELETE' }),
+};
+
+/* --------------------------------------------------------------------- */
+/* Groups & automations                                                   */
+/* --------------------------------------------------------------------- */
+
+function normalizeRef(raw: Loose): SwitchRef {
+  return { deviceId: str(raw.deviceId ?? raw.device_id) ?? '', channelIdx: num(raw.channelIdx ?? raw.channel_idx) };
+}
+
+function normalizeGroup(raw: Loose): Group {
+  const hh = raw.householdId ?? raw.household_id;
+  return {
+    id: num(raw.id),
+    householdId: hh != null ? num(hh) : null,
+    name: str(raw.name) ?? '',
+    members: listOf(raw, 'members').map(normalizeRef),
+  };
+}
+
+function normalizeTrigger(raw: Loose): AutomationTrigger {
+  if (raw.type === 'state') {
+    return { type: 'state', ...normalizeRef(raw), state: raw.state === 'OFF' ? 'OFF' : 'ON' };
+  }
+  return {
+    type: 'schedule',
+    days: Array.isArray(raw.days) ? (raw.days as unknown[]).map(num) : [],
+    time: (str(raw.time) ?? '00:00').slice(0, 5),
+  };
+}
+
+function normalizeAutomation(raw: Loose): Automation {
+  return {
+    id: num(raw.id),
+    householdId: num(raw.householdId ?? raw.household_id),
+    name: str(raw.name) ?? '',
+    enabled: raw.enabled !== false,
+    trigger: normalizeTrigger((raw.trigger as Loose) ?? {}),
+    actions: listOf(raw, 'actions').map(
+      (a): AutomationAction => ({ ...normalizeRef(a), state: a.state === 'OFF' ? 'OFF' : 'ON' }),
+    ),
+    lastFiredAt: str(raw.lastFiredAt ?? raw.last_fired_at),
+  };
+}
+
+export const groupsApi = {
+  list: async () => listOf(await request<unknown>(bff('groups')), 'groups').map(normalizeGroup),
+  /** Create (no `id`) or update (`id`: replaces name + members). Any household member may. */
+  save: async (input: GroupInput) =>
+    normalizeGroup((await request<Loose>(bff('groups'), { method: 'POST', body: input })) ?? {}),
+  remove: (id: number) => request<null>(bff(`groups/${id}`), { method: 'DELETE' }),
+};
+
+function normalizeSwitchUsage(raw: Loose): SwitchUsage {
+  const daily = Array.isArray(raw.dailyOnSeconds) ? (raw.dailyOnSeconds as unknown[]).map((v) => num(v) || 0) : [];
+  const watts = optNum(raw.watts);
+  return {
+    channelIdx: num(raw.channelIdx ?? raw.channel_idx),
+    name: str(raw.name) ?? '',
+    watts,
+    dailyOnSeconds: daily,
+    totalOnSeconds: num(raw.totalOnSeconds ?? daily.reduce((a, b) => a + b, 0)) || 0,
+    kwh: optNum(raw.kwh),
+  };
+}
+
+export const usageApi = {
+  household: async (householdId: number, days: number): Promise<HouseholdUsage> => {
+    const raw = (await request<Loose>(`${bff('usage')}${query({ householdId, days })}`)) ?? {};
+    const totals = (raw.totals ?? {}) as Loose;
+    return {
+      timezone: str(raw.timezone) ?? 'UTC',
+      days: Array.isArray(raw.days) ? (raw.days as unknown[]).map((d) => String(d)) : [],
+      switches: listOf(raw, 'switches').map(
+        (s): HouseholdSwitchUsage => ({
+          ...normalizeSwitchUsage(s),
+          deviceId: str(s.deviceId ?? s.device_id) ?? '',
+          deviceName: str(s.deviceName ?? s.device_name) ?? '',
+        }),
+      ),
+      totals: { onSeconds: num(totals.onSeconds ?? 0) || 0, kwh: optNum(totals.kwh) },
+    };
+  },
+};
+
+function normalizeSceneAction(a: Loose): SceneAction {
+  return { ...normalizeRef(a), state: a.state === 'OFF' ? 'OFF' : 'ON' };
+}
+
+function normalizeScene(raw: Loose): Scene {
+  const hh = raw.householdId ?? raw.household_id;
+  return {
+    id: num(raw.id),
+    householdId: hh != null ? num(hh) : null,
+    name: str(raw.name) ?? '',
+    icon: str(raw.icon),
+    actions: listOf(raw, 'actions').map(normalizeSceneAction),
+    createdAt: str(raw.createdAt ?? raw.created_at),
+    updatedAt: str(raw.updatedAt ?? raw.updated_at),
+  };
+}
+
+export const scenesApi = {
+  list: async (householdId?: number) =>
+    listOf(await request<unknown>(`${bff('scenes')}${query({ householdId })}`), 'scenes').map(normalizeScene),
+  /** Create (no `id`) or replace (`id`). Any household member may (mirrors groups). */
+  save: async (input: SceneInput) => {
+    const raw = (await request<Loose>(bff('scenes'), { method: 'POST', body: input })) ?? {};
+    return normalizeScene(((raw.scene as Loose) ?? raw) as Loose);
+  },
+  remove: (id: number) => request<null>(bff(`scenes/${id}`), { method: 'DELETE' }),
+  run: async (id: number): Promise<SceneRunResult> => {
+    const raw = (await request<Loose>(bff(`scenes/${id}/run`), { method: 'POST' })) ?? {};
+    const results = listOf(raw, 'results').map((r) => ({
+      ...normalizeSceneAction(r),
+      ok: r.ok === true,
+      error: str(r.error && typeof r.error === 'object' ? (r.error as Loose).code : r.error),
+      retryAfterSeconds: optNum(
+        r.retryAfterSeconds ?? (r.error && typeof r.error === 'object' ? (r.error as Loose).retryAfterSeconds : null),
+      ),
+    }));
+    const succeeded = results.filter((r) => r.ok).length;
+    return {
+      results,
+      succeeded: raw.succeeded != null ? num(raw.succeeded) : succeeded,
+      failed: raw.failed != null ? num(raw.failed) : results.length - succeeded,
+    };
+  },
+};
+
+export const automationsApi = {
+  list: async () => listOf(await request<unknown>(bff('automations')), 'automations').map(normalizeAutomation),
+  /** Create (no `id`) or replace (`id`). Owner-only on the backend. */
+  save: async (input: AutomationInput) =>
+    normalizeAutomation((await request<Loose>(bff('automations'), { method: 'POST', body: input })) ?? {}),
+  remove: (id: number) => request<null>(bff(`automations/${id}`), { method: 'DELETE' }),
 };
 
 /* --------------------------------------------------------------------- */

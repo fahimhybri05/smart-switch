@@ -21,6 +21,8 @@ const switchIdParam = {
 const actuationErrors = {
   401: errorResponse('Missing, invalid or revoked API key.'),
   404: errorResponse('Switch not found (or not in any of your households).'),
+  409: errorResponse('min_off_time: the switch must stay off longer before turning on (see error.retryAfterSeconds).'),
+  423: errorResponse('switch_locked: the switch is locked.'),
   429: errorResponse('Rate limited.'),
   502: errorResponse('device_error: the device rejected the command.'),
   503: errorResponse('device_offline: the device is not connected.'),
@@ -55,6 +57,8 @@ function hookOperation(action, summary) {
     responses: {
       200: switchResponse,
       404: errorResponse('Any failure: unknown/revoked hook or key, or no longer allowed.'),
+      409: errorResponse('min_off_time (see error.retryAfterSeconds)'),
+      423: errorResponse('switch_locked'),
       429: errorResponse('Rate limited.'),
       503: errorResponse('device_offline'),
       504: errorResponse('device_timeout'),
@@ -94,9 +98,14 @@ export function buildOpenApiSpec(serverUrl) {
                   example: 'device_offline',
                   description:
                     'missing_api_key | invalid_api_key | invalid_request | invalid_json | not_found | ' +
-                    'method_not_allowed | rate_limited | device_offline | device_timeout | device_error | internal_error',
+                    'method_not_allowed | rate_limited | device_offline | device_timeout | device_error | ' +
+                    'switch_locked | min_off_time | internal_error',
                 },
                 message: { type: 'string' },
+                retryAfterSeconds: {
+                  type: 'integer',
+                  description: 'min_off_time only: seconds until the switch may be turned on.',
+                },
               },
             },
           },

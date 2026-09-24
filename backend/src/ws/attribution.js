@@ -60,3 +60,27 @@ export function takeAttribution(deviceId, channelIdx, state) {
   }
   return result;
 }
+
+/**
+ * Drops the NEWEST queued attribution for this key when it was noted within
+ * the last couple of seconds — called by ws/registry.js when the safety
+ * guard refuses a command its caller had just noted, so a stale entry can't
+ * mis-attribute an unrelated change (e.g. a physical press) within the TTL.
+ * The recency bound keeps a caller that never noted anything (device
+ * schedules) from discarding someone else's older entry.
+ */
+const RECENT_NOTE_MS = 2_000;
+export function discardRecentExpectedStateChange(deviceId, channelIdx, state) {
+  const k = key(deviceId, channelIdx, state);
+  const queue = pending.get(k);
+  if (!queue || queue.length === 0) {
+    return;
+  }
+  const newest = queue[queue.length - 1];
+  if (newest.expiresAt - TTL_MS >= Date.now() - RECENT_NOTE_MS) {
+    queue.pop();
+  }
+  if (queue.length === 0) {
+    pending.delete(k);
+  }
+}

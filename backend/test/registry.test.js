@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 
+import { pool } from '../src/db/pool.js';
 import {
   broadcastToUser,
   registerClient,
@@ -30,12 +31,15 @@ test('relayToDevice returns null when the device has no live connection', () => 
   assert.equal(result, null);
 });
 
-test('relayToDevice forwards to the device socket, resolveDeviceResponse routes the reply back to the right client', async () => {
+test('relayToDevice forwards to the device socket, resolveDeviceResponse routes the reply back to the right client', async (t) => {
+  // Channel-state commands pass the lock/min-off guard first (no switch row -> allowed).
+  mock.method(pool, 'query', async () => ({ rows: [] }));
+  t.after(() => mock.restoreAll());
   const deviceWs = new FakeSocket();
   const clientWs = new FakeSocket();
   registerDevice('esp-registry-test-1', deviceWs);
 
-  const internalReqId = relayToDevice(
+  const internalReqId = await relayToDevice(
     'esp-registry-test-1',
     { method: 'POST', path: '/api/channels/0/state', body: { state: 'ON' } },
     clientWs,

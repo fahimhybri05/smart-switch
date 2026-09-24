@@ -1,3 +1,4 @@
+import { checkChannelCommand, guardRestResponse } from '../safety/guard.js';
 import { relayCommand } from '../ws/registry.js';
 import { getChannels } from './channels.js';
 import { getConfig, getInfo } from './info.js';
@@ -24,10 +25,17 @@ const CHANNEL_STATE_PATH = /^\/api\/channels\/(\d+)\/state$/;
  * (ws/attribution.js has no pending note for it), which is the correct
  * read here — it plausibly came from something on the device's own LAN.
  */
-function authorizeChannelStateFromDevice(channelIdx, body) {
+async function authorizeChannelStateFromDevice(deviceId, channelIdx, body) {
   const state = body?.state;
   if (!Number.isInteger(channelIdx) || channelIdx < 0 || (state !== 'ON' && state !== 'OFF')) {
     return { status: 400, body: { error: 'channel_idx and state ("ON"|"OFF") are required' } };
+  }
+  // A LAN request is still a remote command (not a physical press): the
+  // switch lock / min-off rules apply exactly as on the cloud relay. The
+  // device only applies the command on a 2xx.
+  const block = await checkChannelCommand(deviceId, channelIdx, state);
+  if (block) {
+    return guardRestResponse(block);
   }
   return { status: 200, body: { channel_idx: channelIdx, state } };
 }
@@ -77,9 +85,10 @@ const PASSWORD_ROUTE_REMOVED_RESPONSE = {
  *
  * Always resolves to `{status, body}` — callers reply/render that
  * directly, mirroring how each old firmware handler produced its own
- * status+body.
+ * status+body. `actorUserId` (optional) is the user behind the request
+ * when known (client WS / REST relay) — recorded as `locked_by`.
  */
-export async function dispatchDeviceApi(deviceId, method, path, body) {
+export async function dispatchDeviceApi(deviceId, method, path, body, { actorUserId = null } = {}) {
   try {
     if (method === 'GET' && path === '/api/info') {
       return await getInfo(deviceId);
@@ -88,7 +97,7 @@ export async function dispatchDeviceApi(deviceId, method, path, body) {
       return await getConfig(deviceId);
     }
     if (method === 'POST' && path === '/api/switches') {
-      return await upsertSwitch(deviceId, body);
+      return await upsertSwitch(deviceId, body, { actorUserId });
     }
     if (method === 'GET' && path === '/api/channels') {
       return await getChannels(deviceId);
@@ -112,7 +121,7 @@ export async function dispatchDeviceApi(deviceId, method, path, body) {
     if (method === 'POST') {
       const channelMatch = path.match(CHANNEL_STATE_PATH);
       if (channelMatch) {
-        return authorizeChannelStateFromDevice(Number(channelMatch[1]), body);
+        return await authorizeChannelStateFromDevice(deviceId, Number(channelMatch[1]), body);
       }
     }
 

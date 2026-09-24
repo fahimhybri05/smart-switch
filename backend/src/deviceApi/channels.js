@@ -34,10 +34,16 @@ export async function getChannels(deviceId) {
  * see deviceSchedules/scheduler.js's own comment for why that's an
  * acceptable, documented choice here.
  */
-export function setChannelState(deviceId, channelIdx, state) {
-  return relayCommand(deviceId, {
-    method: 'POST',
-    path: `/api/channels/${channelIdx}/state`,
-    body: { state },
-  });
+export function setChannelState(deviceId, channelIdx, state, { bypassGuard = false } = {}) {
+  return relayCommand(
+    deviceId,
+    {
+      method: 'POST',
+      path: `/api/channels/${channelIdx}/state`,
+      body: { state },
+    },
+    // Lock/min-off rules are enforced inside relayCommand (safety/guard.js);
+    // only the max-runtime auto-OFF bypasses them.
+    { bypassGuard },
+  );
 }

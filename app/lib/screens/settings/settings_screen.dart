@@ -447,6 +447,23 @@ class SettingsScreen extends ConsumerWidget {
                   onTap: () =>
                       Navigator.of(context).pushNamed(AppRoutes.automations),
                 ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const _RowIconBox(Icons.auto_awesome_outlined),
+                  title: const Text('Scenes'),
+                  subtitle: const Text('Set several switches with one tap'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      Navigator.of(context).pushNamed(AppRoutes.scenes),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const _RowIconBox(Icons.insights_outlined),
+                  title: const Text('Usage'),
+                  subtitle: const Text('On time and energy per switch'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).pushNamed(AppRoutes.usage),
+                ),
               ],
             ),
           ),

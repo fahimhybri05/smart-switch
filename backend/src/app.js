@@ -10,6 +10,8 @@ import { devicesRouter } from './routes/devices.js';
 import { groupsRouter } from './routes/groups.js';
 import { hooksRouter } from './routes/hooks.js';
 import { householdsRouter } from './routes/households.js';
+import { scenesRouter } from './routes/scenes.js';
+import { usageRouter } from './routes/usage.js';
 import { createV1Router, v1ErrorHandler } from './v1/router.js';
 
 export function createApp() {
@@ -46,6 +48,8 @@ export function createApp() {
   app.use('/auth', authRouter);
   app.use('/devices', devicesRouter);
   app.use('/groups', groupsRouter);
+  app.use('/scenes', scenesRouter);
+  app.use('/usage', usageRouter);
   app.use('/households', householdsRouter);
   app.use('/activity', activityRouter);
   app.use('/automations', automationsRouter);

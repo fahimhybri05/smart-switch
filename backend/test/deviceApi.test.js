@@ -234,7 +234,10 @@ test('dispatchDeviceApi GET /api/channels reads straight from cached_channel_sta
   ]);
 });
 
-test('dispatchDeviceApi POST /api/channels/:idx/state (device-forwarded) authorizes without relaying back to the device', async () => {
+test('dispatchDeviceApi POST /api/channels/:idx/state (device-forwarded) authorizes without relaying back to the device', async (t) => {
+  // The lock/min-off guard reads the switch row: none -> allowed.
+  mockQueryResults([{ rows: [] }]);
+  t.after(() => mock.restoreAll());
   // No device registered at all for this id — if this path incorrectly
   // tried to relay back down, relayCommand would throw device_offline and
   // this would come back as something other than a clean 200.

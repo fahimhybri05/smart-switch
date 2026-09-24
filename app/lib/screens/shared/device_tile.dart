@@ -12,10 +12,12 @@ import '../device_detail/device_detail_screen.dart';
 import 'device_visualization.dart';
 import 'edit_switch_dialog.dart';
 import 'friendly_error.dart';
+import 'lock_badge.dart';
 
 /// Big, square, tap-to-toggle tile — the primary at-a-glance control surface
 /// on the Home dashboard (Google Home / Nest-style device grid). Whole tile
-/// toggles the switch; the corner icon opens rename/zone editing.
+/// toggles the switch (or, when locked, explains why it won't); the corner
+/// menu opens the switch settings dialog.
 class DeviceTile extends ConsumerWidget {
   const DeviceTile({
     super.key,
@@ -143,6 +145,10 @@ class DeviceTile extends ConsumerWidget {
                               state: visualState,
                               color: foregroundColor,
                             ),
+                      if (switchConfig.locked) ...[
+                        const SizedBox(width: Spacing.xs),
+                        const SwitchLockBadge(),
+                      ],
                       const Spacer(),
                       // PopupMenuButton's default IconButton enforces a 48x48
                       // min tap target regardless of the icon's own size —
@@ -181,7 +187,7 @@ class DeviceTile extends ConsumerWidget {
                             ),
                             PopupMenuItem(
                               value: 'edit',
-                              child: Text('Edit name and room'),
+                              child: Text('Switch settings'),
                             ),
                           ],
                         ),
@@ -241,6 +247,12 @@ class DeviceTile extends ConsumerWidget {
   }
 
   Future<void> _toggle(BuildContext context, WidgetRef ref, bool value) async {
+    // Locked: say so instead of sending — the backend would reject it
+    // anyway (423 switch_locked), this just skips the round trip.
+    if (switchConfig.locked) {
+      showSwitchLockedSnackBar(context);
+      return;
+    }
     HapticFeedback.lightImpact();
     final desired = value ? ChannelPowerState.on : ChannelPowerState.off;
     ref
@@ -263,33 +275,8 @@ class DeviceTile extends ConsumerWidget {
     }
   }
 
-  Future<void> _edit(BuildContext context, WidgetRef ref) async {
-    final result = await showEditSwitchDialog(context, switchConfig);
-    if (result == null) return;
-
-    final (name, zone, inputMode, inchingMs) = result;
-    final client = ref.read(activeDeviceApiClientProvider(device));
-    try {
-      await client.upsertSwitch(
-        SwitchConfig(
-          channelIdx: switchConfig.channelIdx,
-          name: name,
-          zone: zone,
-          type: switchConfig.type,
-          defaultBootState: switchConfig.defaultBootState,
-          inputMode: inputMode,
-          inchingMs: inchingMs,
-        ),
-      );
-      ref.invalidate(deviceConfigProvider(device));
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(friendlyErrorMessage(e, 'Save'))),
-        );
-      }
-    }
-  }
+  Future<void> _edit(BuildContext context, WidgetRef ref) =>
+      editSwitchSettings(context, ref, device, switchConfig);
 }
 
 class _StateDot extends StatelessWidget {

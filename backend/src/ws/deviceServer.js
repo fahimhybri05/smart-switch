@@ -176,10 +176,17 @@ async function markOffline(deviceId) {
 
 async function recordStateChange(deviceId, channelIdx, state) {
   const { rows } = await pool.query(
-    `INSERT INTO cached_channel_state (device_id, channel_idx, state, updated_at)
-     VALUES ($1, $2, $3, now())
+    `INSERT INTO cached_channel_state (device_id, channel_idx, state, updated_at, state_since)
+     VALUES ($1, $2, $3, now(), now())
      ON CONFLICT (device_id, channel_idx)
-     DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+     DO UPDATE SET state = EXCLUDED.state, updated_at = now(),
+       -- Only a real change moves state_since (echo replays of the same
+       -- state must not reset max-runtime / min-off timing).
+       state_since = CASE
+         WHEN cached_channel_state.state IS DISTINCT FROM EXCLUDED.state
+           OR cached_channel_state.state_since IS NULL THEN now()
+         ELSE cached_channel_state.state_since
+       END
      RETURNING (SELECT household_id FROM devices WHERE device_id = $1) AS household_id`,
     [deviceId, channelIdx, state],
   );

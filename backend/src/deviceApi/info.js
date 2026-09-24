@@ -56,7 +56,8 @@ export async function getConfig(deviceId) {
 
   const [{ rows: switchRows }, schedules, settings] = await Promise.all([
     pool.query(
-      `SELECT channel_idx, COALESCE(name, '') AS name, COALESCE(zone, '') AS zone, type, default_boot_state, input_mode, inching_ms
+      `SELECT channel_idx, COALESCE(name, '') AS name, COALESCE(zone, '') AS zone, type, default_boot_state, input_mode, inching_ms,
+              watts, max_on_s, min_off_s, (locked_at IS NOT NULL) AS locked
        FROM device_switches WHERE device_id = $1 ORDER BY channel_idx`,
       [deviceId],
     ),

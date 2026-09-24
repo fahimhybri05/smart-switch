@@ -83,7 +83,9 @@ export function handleClientConnection(ws, userId) {
       if (!match || method !== 'POST') {
         // Everything except actuation is answered by the backend itself —
         // the device holds no config to answer it from.
-        const { status, body: respBody } = await dispatchDeviceApi(deviceId, method, path, body);
+        const { status, body: respBody } = await dispatchDeviceApi(deviceId, method, path, body, {
+          actorUserId: userId,
+        });
         return ws.send(JSON.stringify({ reqId, status, body: respBody }));
       }
       if (body?.state) {
@@ -92,6 +94,8 @@ export function handleClientConnection(ws, userId) {
           actorUserId: userId,
         });
       }
+      // Switch lock / min-off rules are enforced inside relayToDevice
+      // (safety/guard.js), which replies {reqId, status: 0, error} itself.
       relayToDevice(deviceId, { method, path, body }, ws, reqId);
     } catch (err) {
       // Express-async-errors doesn't cover WS event handlers — an unhandled

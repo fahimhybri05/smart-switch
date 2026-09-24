@@ -26,7 +26,7 @@ groupsRouter.get('/', async (req, res) => {
     return res.json({ groups: [] });
   }
   const { rows } = await pool.query(
-    `SELECT g.id, g.name,
+    `SELECT g.id, g.household_id AS "householdId", g.name,
             COALESCE(
               json_agg(
                 json_build_object('deviceId', m.device_id, 'channelIdx', m.channel_idx)
@@ -36,7 +36,7 @@ groupsRouter.get('/', async (req, res) => {
      FROM groups g
      LEFT JOIN group_members m ON m.group_id = g.id
      WHERE g.household_id = ANY($1::bigint[])
-     GROUP BY g.id, g.name
+     GROUP BY g.id, g.household_id, g.name
      ORDER BY g.id`,
     [ids],
   );
@@ -117,7 +117,7 @@ groupsRouter.post('/', async (req, res) => {
     }
 
     await client.query('COMMIT');
-    res.status(200).json({ id: groupId, name, members });
+    res.status(200).json({ id: groupId, householdId, name, members });
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

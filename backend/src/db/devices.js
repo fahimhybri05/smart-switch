@@ -16,13 +16,15 @@ export async function getHouseholdDevicesSnapshot(householdIds) {
               json_agg(
                 json_build_object(
                   'channelIdx', c.channel_idx, 'name', c.name,
-                  'zone', c.zone, 'state', c.state, 'updatedAt', c.updated_at
+                  'zone', c.zone, 'state', c.state, 'updatedAt', c.updated_at,
+                  'locked', s.locked_at IS NOT NULL, 'stateSince', c.state_since
                 ) ORDER BY c.channel_idx
               ) FILTER (WHERE c.channel_idx IS NOT NULL),
               '[]'
             ) AS channels
      FROM devices d
      LEFT JOIN cached_channel_state c ON c.device_id = d.device_id
+     LEFT JOIN device_switches s ON s.device_id = c.device_id AND s.channel_idx = c.channel_idx
      WHERE d.household_id = ANY($1::bigint[])
      GROUP BY d.device_id, d.household_id, d.friendly_name, d.is_online, d.last_seen_at
      ORDER BY d.device_id`,

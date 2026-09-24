@@ -100,8 +100,9 @@ test('runDeviceScheduleTick fires a due schedule, relays it to the device, and r
   resolveDeviceResponse(socket.sent[0].reqId, 200, { channel_idx: 0, state: 'ON' });
   await tickPromise;
 
-  assert.equal(pool.query.mock.calls.length, 2);
-  const updateCall = pool.query.mock.calls[1];
+  // list + safety-guard check (lock/min-off, inside relayCommand) + update.
+  assert.equal(pool.query.mock.calls.length, 3);
+  const updateCall = pool.query.mock.calls[2];
   assert.match(updateCall.arguments[0], /UPDATE device_schedules SET last_fired_at/);
   assert.deepEqual(updateCall.arguments[1], ['esp-sched-1', 's-1', false]);
 });
@@ -240,7 +241,7 @@ test('daily schedules fire every day regardless of days_mask', async (t) => {
 test('once schedules disable themselves after firing', async (t) => {
   const socket = await tickWithDevice(t, baseRow({ type: 'once', days_mask: 0 }));
   assert.equal(socket.sent.length, 1);
-  assert.deepEqual(pool.query.mock.calls[1].arguments[1], ['esp-sched-1', 's-1', true]);
+  assert.deepEqual(pool.query.mock.calls[2].arguments[1], ['esp-sched-1', 's-1', true]);
 });
 
 test('countdown fires once its duration has elapsed, then disables itself', async (t) => {
@@ -250,7 +251,7 @@ test('countdown fires once its duration has elapsed, then disables itself', asyn
     baseRow({ type: 'countdown', time: null, days_mask: 0, duration_s: 60, countdown_started_at: startedAt }),
   );
   assert.equal(socket.sent.length, 1);
-  assert.deepEqual(pool.query.mock.calls[1].arguments[1], ['esp-sched-1', 's-1', true]);
+  assert.deepEqual(pool.query.mock.calls[2].arguments[1], ['esp-sched-1', 's-1', true]);
 });
 
 test('countdown does not fire before its duration has elapsed', async (t) => {

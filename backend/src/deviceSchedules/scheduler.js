@@ -1,5 +1,6 @@
 import { setChannelState } from '../deviceApi/channels.js';
 import { pool } from '../db/pool.js';
+import { isGuardError } from '../safety/guard.js';
 import { localSolarMinutes } from './solar.js';
 
 const TICK_MS = 60_000;
@@ -76,18 +77,31 @@ let tickInFlight = null;
  */
 async function fireDeviceSchedule(row) {
   const doFire = () => setChannelState(row.device_id, row.channel_idx, row.action);
+  // A refusal by the switch lock / min-off rules (safety/guard.js) is a
+  // rule, not a transient failure: no retry, and the occurrence counts as
+  // handled (last_fired_at below), so it isn't re-attempted on every tick
+  // of the catch-up window.
+  const logRefused = (err) =>
+    console.warn(`device schedule ${row.id} (${row.device_id} ch${row.channel_idx}) refused: ${err.code}`);
   try {
     await doFire();
   } catch (firstErr) {
-    await sleep(RELAY_RETRY_DELAY_MS);
-    try {
-      await doFire();
-    } catch (retryErr) {
-      console.error(
-        `device schedule ${row.id} (${row.device_id} ch${row.channel_idx}) failed to fire (after 1 retry)`,
-        retryErr,
-      );
-      return;
+    if (isGuardError(firstErr)) {
+      logRefused(firstErr);
+    } else {
+      await sleep(RELAY_RETRY_DELAY_MS);
+      try {
+        await doFire();
+      } catch (retryErr) {
+        if (!isGuardError(retryErr)) {
+          console.error(
+            `device schedule ${row.id} (${row.device_id} ch${row.channel_idx}) failed to fire (after 1 retry)`,
+            retryErr,
+          );
+          return;
+        }
+        logRefused(retryErr);
+      }
     }
   }
   // 'once' and 'countdown' are one-shot: disable after firing, same as the

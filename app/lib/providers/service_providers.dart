@@ -13,7 +13,9 @@ import '../models/device/device_config.dart';
 import '../models/local/automation.dart';
 import '../models/local/household.dart';
 import '../models/local/known_device.dart';
+import '../models/local/scene.dart';
 import '../models/local/switch_group.dart';
+import '../models/local/usage.dart';
 import '../services/app_settings_service.dart';
 import '../services/backend/auth_session_service.dart';
 import '../services/backend/backend_api_exception.dart';
@@ -23,6 +25,8 @@ import '../services/backend/backend_devices_client.dart';
 import '../services/backend/backend_groups_client.dart';
 import '../services/backend/backend_automations_client.dart';
 import '../services/backend/backend_households_client.dart';
+import '../services/backend/backend_scenes_client.dart';
+import '../services/backend/backend_usage_client.dart';
 import '../services/backend/backend_ws_client.dart';
 import '../services/backend/jwt.dart';
 import '../services/backup_service.dart';
@@ -942,6 +946,107 @@ final householdInvitesProvider =
     NotifierProvider<HouseholdInvitesNotifier, List<HouseholdInvite>>(
       HouseholdInvitesNotifier.new,
     );
+
+/// Backs household scenes (see the user-features contract) — backend-only,
+/// no offline cache, same shape as [AutomationsNotifier]. Rebuilds (and so
+/// refetches) when the signed-in account or backend URL changes, but not on
+/// every access-token refresh.
+class ScenesNotifier extends Notifier<List<Scene>> {
+  Future<BackendScenesClient> _requireClient() async {
+    if (ref.read(authProvider) == null || ref.read(backendUrlProvider) == null) {
+      throw StateError('Log in to use scenes.');
+    }
+    final accessToken = await ensureFreshAccessTokenForNotifier(ref);
+    return BackendScenesClient(
+      baseUrl: ref.read(backendUrlProvider)!,
+      accessToken: accessToken,
+    );
+  }
+
+  @override
+  List<Scene> build() {
+    ref.watch(authProvider.select((auth) => auth?.email));
+    ref.watch(backendUrlProvider);
+    Future.microtask(refresh);
+    return const [];
+  }
+
+  Future<void> refresh() async {
+    if (ref.read(authProvider) == null || ref.read(backendUrlProvider) == null) {
+      state = const [];
+      return;
+    }
+    try {
+      state = await (await _requireClient()).list();
+    } catch (_) {
+      // Best-effort on refresh — save()/remove()/run() still throw.
+    }
+  }
+
+  Future<void> save({
+    int? id,
+    int? householdId,
+    required String name,
+    String? icon,
+    required List<SceneAction> actions,
+  }) async {
+    final client = await _requireClient();
+    await client.upsert(
+      id: id,
+      householdId: householdId,
+      name: name,
+      icon: icon,
+      actions: actions,
+    );
+    await refresh();
+  }
+
+  Future<void> remove(int id) async {
+    final client = await _requireClient();
+    await client.delete(id);
+    await refresh();
+  }
+
+  Future<SceneRunSummary> run(int id) async {
+    final client = await _requireClient();
+    return client.run(id);
+  }
+}
+
+final scenesProvider = NotifierProvider<ScenesNotifier, List<Scene>>(
+  ScenesNotifier.new,
+);
+
+Future<BackendUsageClient> _usageClient(Ref ref) async {
+  final backendUrl = ref.read(backendUrlProvider);
+  if (ref.read(authProvider) == null || backendUrl == null) {
+    throw StateError('Log in to see usage.');
+  }
+  final accessToken = await ensureFreshAccessTokenForNotifier(ref);
+  return BackendUsageClient(baseUrl: backendUrl, accessToken: accessToken);
+}
+
+typedef DeviceUsageKey = ({String deviceId, int days});
+
+/// `GET /devices/:id/usage` — fetched on demand by the device detail
+/// screen's Usage section; autoDispose so it refetches on the next visit.
+final deviceUsageProvider = FutureProvider.autoDispose
+    .family<UsageReport, DeviceUsageKey>((ref, key) async {
+      final client = await _usageClient(ref);
+      return client.deviceUsage(key.deviceId, days: key.days);
+    });
+
+typedef HouseholdUsageKey = ({int? householdId, int days});
+
+/// `GET /usage` — the household Usage screen.
+final householdUsageProvider = FutureProvider.autoDispose
+    .family<UsageReport, HouseholdUsageKey>((ref, key) async {
+      final client = await _usageClient(ref);
+      return client.householdUsage(
+        householdId: key.householdId,
+        days: key.days,
+      );
+    });
 
 /// One GET /api/config fetch per device. autoDispose so a device that's no
 /// longer on screen stops being fetched/held in memory.

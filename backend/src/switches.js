@@ -12,10 +12,12 @@ import { isDeviceOnline } from './ws/registry.js';
  */
 
 export class SwitchError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, extra = {}) {
     super(message);
     this.status = status;
     this.code = code;
+    // e.g. `retryAfterSeconds` for min_off_time — included in the /v1 error body.
+    this.extra = extra;
   }
 }
 
@@ -99,7 +101,9 @@ export function toggleTarget(currentState) {
  * the device's confirming `state_changed` echo is logged with `source`),
  * then relays via setChannelState. Resolves with the confirmed state
  * ('on'|'off'); throws SwitchError 503 device_offline / 504 device_timeout
- * / 502 device_error.
+ * / 502 device_error, or — from the safety guard enforced inside the relay
+ * (safety/guard.js) — 423 switch_locked / 409 min_off_time (with
+ * `extra.retryAfterSeconds`).
  */
 export async function actuate({ deviceId, channelIdx, state, source, actorUserId = null }) {
   const wire = state === 'on' ? 'ON' : 'OFF';
@@ -116,6 +120,17 @@ export async function actuate({ deviceId, channelIdx, state, source, actorUserId
     }
     if (err.code === 'device_timeout') {
       throw new SwitchError(504, 'device_timeout', 'The device did not respond in time.');
+    }
+    if (err.code === 'switch_locked') {
+      throw new SwitchError(423, 'switch_locked', 'This switch is locked.');
+    }
+    if (err.code === 'min_off_time') {
+      throw new SwitchError(
+        409,
+        'min_off_time',
+        `This switch must stay off for another ${err.retryAfterSeconds}s before it can be turned on.`,
+        { retryAfterSeconds: err.retryAfterSeconds },
+      );
     }
     throw err;
   }

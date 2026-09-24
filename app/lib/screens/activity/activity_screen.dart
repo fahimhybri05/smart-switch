@@ -89,6 +89,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     'api' => Icons.api_rounded,
     'hook' => Icons.link_rounded,
     'dashboard' => Icons.dashboard_outlined,
+    'safety' => Icons.shield_outlined,
     _ => Icons.touch_app_outlined,
   };
 
@@ -102,6 +103,7 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     'api' => 'API',
     'hook' => 'Webhook URL',
     'dashboard' => 'Web dashboard',
+    'safety' => 'Safety auto-off',
     _ => entry.actorEmail ?? 'App',
   };
 

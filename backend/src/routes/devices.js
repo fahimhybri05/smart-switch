@@ -15,6 +15,8 @@ import {
 } from '../deviceApi/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { attachHouseholds, isHouseholdMember, isHouseholdOwner } from '../middleware/household.js';
+import { guardRestResponse, isGuardError } from '../safety/guard.js';
+import { getUsage, usageQuerySchema } from '../usage.js';
 import { noteExpectedStateChange } from '../ws/attribution.js';
 import { isDeviceOnline, relayCommand } from '../ws/registry.js';
 
@@ -189,7 +191,9 @@ devicesRouter.post('/:deviceId/command', async (req, res) => {
     if (!isDeviceOnline(req.params.deviceId)) {
       return res.status(503).json({ error: 'device_offline' });
     }
-    return res.status(200).json(await dispatchDeviceApi(req.params.deviceId, method, path, body));
+    return res
+      .status(200)
+      .json(await dispatchDeviceApi(req.params.deviceId, method, path, body, { actorUserId: req.userId }));
   }
   if (body?.state) {
     noteExpectedStateChange(req.params.deviceId, Number(match[1]), body.state, {
@@ -207,6 +211,12 @@ devicesRouter.post('/:deviceId/command', async (req, res) => {
     }
     if (err.code === 'device_timeout') {
       return res.status(504).json({ error: 'device_timeout' });
+    }
+    // Switch lock / min-off rules, enforced inside relayCommand (safety/guard.js).
+    if (isGuardError(err)) {
+      const { status, body: errBody } = guardRestResponse(err);
+      if (errBody.retryAfterSeconds !== undefined) res.set('Retry-After', String(errBody.retryAfterSeconds));
+      return res.status(status).json(errBody);
     }
     throw err;
   }
@@ -246,12 +256,17 @@ const switchPatchSchema = z.object({
   inputMode: z.enum(['DISABLED', 'TOGGLE', 'EDGE']).optional(),
   // Same upper bound the app's edit dialog clamps to.
   inchingMs: z.number().int().min(0).max(600_000).optional(),
+  // Safety/energy fields: null clears, omitted preserves (upsertSwitch).
+  watts: z.number().int().min(0).max(100_000).nullable().optional(),
+  maxOnSeconds: z.number().int().min(1).max(604_800).nullable().optional(),
+  minOffSeconds: z.number().int().min(1).max(86_400).nullable().optional(),
+  locked: z.boolean().optional(),
 });
 
 /**
  * Partial switch update. upsertSwitch is a full replace of name/zone/
- * default_boot_state (only input_mode/inching_ms are preserved when
- * omitted), so the stored row is merged in first — a rename no longer wipes
+ * default_boot_state (input_mode/inching_ms/watts/max_on_s/min_off_s/lock
+ * are preserved when omitted), so the stored row is merged in first — a rename no longer wipes
  * the zone or boot state. upsertSwitch itself pushes hw config to the
  * device only when inputMode/inchingMs are part of the request.
  */
@@ -284,9 +299,30 @@ devicesRouter.patch('/:deviceId/switches/:idx', async (req, res) => {
   };
   if (patch.inputMode !== undefined) body.input_mode = patch.inputMode;
   if (patch.inchingMs !== undefined) body.inching_ms = patch.inchingMs;
+  if (patch.watts !== undefined) body.watts = patch.watts;
+  if (patch.maxOnSeconds !== undefined) body.max_on_s = patch.maxOnSeconds;
+  if (patch.minOffSeconds !== undefined) body.min_off_s = patch.minOffSeconds;
+  if (patch.locked !== undefined) body.locked = patch.locked;
 
-  const result = await upsertSwitch(req.params.deviceId, body);
+  const result = await upsertSwitch(req.params.deviceId, body, { actorUserId: req.userId });
   res.status(result.status).json(result.body);
+});
+
+/** Per-switch ON time (and kWh when watts is set) for this device over the
+ * last `days` household-local days — see usage.js. */
+devicesRouter.get('/:deviceId/usage', async (req, res) => {
+  const parsed = usageQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0].message });
+  }
+  const householdId = await requireMemberDevice(req, res);
+  if (!householdId) return;
+  const usage = await getUsage({ householdId, deviceId: req.params.deviceId, days: parsed.data.days });
+  res.json({
+    timezone: usage.timezone,
+    days: usage.days,
+    switches: usage.switches.map(({ deviceId, deviceName, ...sw }) => sw),
+  });
 });
 
 /** Create (no `id`) or update (`id`) a device schedule — same wire shape as

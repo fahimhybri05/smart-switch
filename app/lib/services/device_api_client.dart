@@ -3,15 +3,20 @@ import '../models/device/device_config.dart';
 import '../models/device/device_info.dart';
 import '../models/device/schedule.dart';
 import '../models/device/switch_config.dart';
+import 'api_error_body.dart';
 import 'device_transport.dart';
 
 /// Thrown on any non-2xx response. [message] is the server's `{"error":...}`
 /// body when present, otherwise a generic description.
 class DeviceApiException implements Exception {
-  DeviceApiException(this.statusCode, this.message);
+  DeviceApiException(this.statusCode, this.message, {this.retryAfterSeconds});
 
   final int statusCode;
   final String message;
+
+  /// Set when the backend rejected a turn-ON with
+  /// [CommandErrorCodes.minOffTime] (409) — seconds until it's allowed.
+  final int? retryAfterSeconds;
 
   @override
   String toString() => 'DeviceApiException($statusCode): $message';
@@ -47,12 +52,12 @@ class DeviceApiClient {
     if (resp.statusCode >= 200 && resp.statusCode < 300) {
       return (resp.body as Map<String, dynamic>?) ?? {};
     }
-    String message = 'HTTP ${resp.statusCode}';
-    final decoded = resp.body;
-    if (decoded is Map<String, dynamic> && decoded['error'] is String) {
-      message = decoded['error'] as String;
-    }
-    throw DeviceApiException(resp.statusCode, message);
+    final error = ApiErrorBody.parse(resp.body);
+    throw DeviceApiException(
+      resp.statusCode,
+      error.code ?? 'HTTP ${resp.statusCode}',
+      retryAfterSeconds: error.retryAfterSeconds,
+    );
   }
 
   Future<DeviceInfo> getInfo() async {

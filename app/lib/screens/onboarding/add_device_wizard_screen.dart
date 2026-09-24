@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import '../../models/device/switch_config.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../routing/app_routes.dart';
@@ -477,17 +476,9 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
       final client = ref.read(deviceApiClientProvider('http://$_lastKnownIp'));
       final config = await client.getConfig();
       for (final sw in config.switches) {
-        await client.upsertSwitch(
-          SwitchConfig(
-            channelIdx: sw.channelIdx,
-            name: sw.name,
-            zone: room,
-            type: sw.type,
-            defaultBootState: sw.defaultBootState,
-            inputMode: sw.inputMode,
-            inchingMs: sw.inchingMs,
-          ),
-        );
+        // copyWith keeps watts/safety/lock as-is — a fresh SwitchConfig
+        // would send nulls, which the backend treats as "clear".
+        await client.upsertSwitch(sw.copyWith(zone: room));
       }
       if (mounted) {
         setState(() {

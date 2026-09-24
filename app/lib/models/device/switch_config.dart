@@ -68,7 +68,16 @@ class SwitchConfig {
     required this.defaultBootState,
     this.inputMode = InputMode.disabled,
     this.inchingMs = 0,
+    this.watts,
+    this.maxOnSeconds,
+    this.minOffSeconds,
+    this.locked = false,
   });
+
+  /// Backend-enforced limits (see the user-features contract).
+  static const maxWatts = 100000;
+  static const maxOnSecondsLimit = 604800; // 7 days
+  static const minOffSecondsLimit = 86400; // 24 hours
 
   final int channelIdx;
   final String name;
@@ -85,6 +94,22 @@ class SwitchConfig {
   /// ON (app, schedule, physical input).
   final int inchingMs;
 
+  /// Rated power of the connected load, for kWh estimates in usage stats.
+  /// Null = not set.
+  final int? watts;
+
+  /// Safety: the backend turns this switch OFF once it has been ON this
+  /// long (`max_on_s`). Null = off.
+  final int? maxOnSeconds;
+
+  /// Safety: after turning OFF, remote commands can't turn it back ON until
+  /// this long has passed (`min_off_s`). Null = off.
+  final int? minOffSeconds;
+
+  /// Blocks every remote command (app, schedules, automations, API,
+  /// groups, scenes). The physical switch on the board still works.
+  final bool locked;
+
   factory SwitchConfig.fromJson(Map<String, dynamic> json) => SwitchConfig(
     channelIdx: json['channel_idx'] as int,
     name: json['name'] as String,
@@ -93,8 +118,16 @@ class SwitchConfig {
     defaultBootState: BootState.fromJson(json['default_boot_state'] as String),
     inputMode: InputMode.fromJson(json['input_mode'] as String? ?? 'DISABLED'),
     inchingMs: json['inching_ms'] as int? ?? 0,
+    watts: (json['watts'] as num?)?.toInt(),
+    maxOnSeconds: (json['max_on_s'] as num?)?.toInt(),
+    minOffSeconds: (json['min_off_s'] as num?)?.toInt(),
+    locked: json['locked'] as bool? ?? false,
   );
 
+  /// Always sends `watts`/`max_on_s`/`min_off_s`/`locked`, with explicit
+  /// nulls for unset values: the backend preserves OMITTED fields but
+  /// clears ones sent as null, so a full round-trip of an edited config is
+  /// what makes "blank = off" actually clear a previously-set value.
   Map<String, dynamic> toJson() => {
     'channel_idx': channelIdx,
     'name': name,
@@ -103,5 +136,31 @@ class SwitchConfig {
     'default_boot_state': defaultBootState.toJson(),
     'input_mode': inputMode.toJson(),
     'inching_ms': inchingMs,
+    'watts': watts,
+    'max_on_s': maxOnSeconds,
+    'min_off_s': minOffSeconds,
+    'locked': locked,
   };
+
+  /// Only covers the non-nullable fields — build a fresh [SwitchConfig] to
+  /// clear [watts]/[maxOnSeconds]/[minOffSeconds].
+  SwitchConfig copyWith({
+    String? name,
+    String? zone,
+    InputMode? inputMode,
+    int? inchingMs,
+    bool? locked,
+  }) => SwitchConfig(
+    channelIdx: channelIdx,
+    name: name ?? this.name,
+    zone: zone ?? this.zone,
+    type: type,
+    defaultBootState: defaultBootState,
+    inputMode: inputMode ?? this.inputMode,
+    inchingMs: inchingMs ?? this.inchingMs,
+    watts: watts,
+    maxOnSeconds: maxOnSeconds,
+    minOffSeconds: minOffSeconds,
+    locked: locked ?? this.locked,
+  );
 }

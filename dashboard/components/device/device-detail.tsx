@@ -2,7 +2,7 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CalendarClock, Cpu, Pencil, Settings2, Trash2 } from 'lucide-react';
+import { ArrowLeft, CalendarClock, Cpu, MapPin, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
@@ -13,7 +13,10 @@ import { z } from 'zod';
 import { Callout, ConfirmAction, EmptyState, ErrorState, PageHeader } from '@/components/common';
 import { OnlineBadge } from '@/components/overview/device-card';
 import { SwitchTile } from '@/components/overview/switch-tile';
-import { Badge } from '@/components/ui/badge';
+import { LocationDialog } from '@/components/schedules/location-dialog';
+import { ScheduleDialog, type ScheduleTarget } from '@/components/schedules/schedule-dialog';
+import { ScheduleList } from '@/components/schedules/schedule-list';
+import { DeviceUsageSection } from '@/components/usage/device-usage';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -29,8 +32,9 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { devicesApi, errorMessage } from '@/lib/api';
 import { qk } from '@/lib/cache';
-import { defaultChannelName, formatDays, timeAgo } from '@/lib/format';
+import { timeAgo } from '@/lib/format';
 import { buildSwitchViews, useDeviceConfig, useDevices, useHouseholds } from '@/lib/queries';
+import { formatUtcOffset } from '@/lib/schedule';
 import type { Device, Schedule, SwitchView } from '@/lib/types';
 
 import { SwitchConfigDialog } from './switch-config-dialog';
@@ -99,26 +103,6 @@ function RenameDialog({
   );
 }
 
-function scheduleSummary(s: Schedule): string {
-  switch (s.type) {
-    case 'once':
-      return `Once at ${s.time ?? '—'}`;
-    case 'daily':
-      return `Daily at ${s.time ?? '—'}`;
-    case 'weekly':
-      return `${formatDays(s.days) || 'Weekly'} at ${s.time ?? '—'}`;
-    case 'countdown':
-      return `Countdown ${Math.round((s.duration_s ?? 0) / 60)} min`;
-    case 'sunrise':
-    case 'sunset': {
-      const off = s.solar_offset_min ?? 0;
-      return `At ${s.type}${off ? ` ${off > 0 ? '+' : ''}${off} min` : ''}${s.days?.length ? ` · ${formatDays(s.days)}` : ''}`;
-    }
-    default:
-      return s.type;
-  }
-}
-
 export function DeviceDetail({ deviceId }: { deviceId: string }) {
   const router = useRouter();
   const qc = useQueryClient();
@@ -127,6 +111,8 @@ export function DeviceDetail({ deviceId }: { deviceId: string }) {
   const households = useHouseholds();
   const [renameOpen, setRenameOpen] = useState(false);
   const [editing, setEditing] = useState<SwitchView | null>(null);
+  const [scheduleDialog, setScheduleDialog] = useState<{ existing?: Schedule; channel?: number } | null>(null);
+  const [locationOpen, setLocationOpen] = useState(false);
 
   const device = devicesQuery.data?.find((d) => d.device_id === deviceId);
   const switches = useMemo(
@@ -168,7 +154,7 @@ export function DeviceDetail({ deviceId }: { deviceId: string }) {
 
   const name = device.friendly_name || device.device_id;
   const config = configQuery.data;
-  const nameByIdx = new Map(switches.map((s) => [s.channelIdx, s.name]));
+  const target: ScheduleTarget = { device, config, switches };
 
   const remove = async () => {
     await devicesApi.remove(device.device_id);
@@ -205,7 +191,7 @@ export function DeviceDetail({ deviceId }: { deviceId: string }) {
         <Card>
           <CardHeader>
             <CardTitle>Switches</CardTitle>
-            <CardDescription>Tap a tile to toggle. Use the gear to rename, set the zone, boot state and input.</CardDescription>
+            <CardDescription>Tap a tile to toggle. Use the gear for name, zone, boot state, power, safety limits and the lock.</CardDescription>
           </CardHeader>
           <CardContent>
             {configQuery.isLoading && switches.length === 0 ? (
@@ -243,37 +229,42 @@ export function DeviceDetail({ deviceId }: { deviceId: string }) {
           </CardContent>
         </Card>
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
+        <DeviceUsageSection deviceId={device.device_id} switches={switches} />
+
+        <Card>
+          <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 space-y-0">
+            <div className="grid gap-1.5">
               <CardTitle className="flex items-center gap-2">
                 <CalendarClock className="h-5 w-5 text-brand-ink" /> Schedules
               </CardTitle>
-              <CardDescription>Create and edit schedules in the mobile app.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!config ? (
-                <Skeleton className="h-16 rounded-lg" />
-              ) : config.schedules.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No schedules.</p>
-              ) : (
-                <ul className="divide-y rounded-xl border">
-                  {config.schedules.map((s) => (
-                    <li key={String(s.id)} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">
-                          {nameByIdx.get(s.channel_idx) ?? defaultChannelName(s.channel_idx)} → {s.action}
-                        </div>
-                        <div className="text-xs text-muted-foreground">{scheduleSummary(s)}</div>
-                      </div>
-                      <Badge variant={s.enabled ? 'default' : 'secondary'}>{s.enabled ? 'On' : 'Paused'}</Badge>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
+              <CardDescription>
+                Turn switches on or off at set times, on a countdown, or at sunrise/sunset
+                {config ? ` · device time ${formatUtcOffset(config.utc_offset_min)}` : ''}.
+              </CardDescription>
+            </div>
+            <Button onClick={() => setScheduleDialog({})} disabled={!config || switches.length === 0}>
+              <Plus /> Add schedule
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {!config ? (
+              <Skeleton className="h-16 rounded-lg" />
+            ) : config.schedules.length === 0 ? (
+              <EmptyState icon={CalendarClock} title="No schedules yet" className="py-8">
+                Add one to switch something automatically — it runs in the cloud, even with every app closed.
+              </EmptyState>
+            ) : (
+              <ScheduleList
+                target={target}
+                onEdit={(existing) => setScheduleDialog({ existing })}
+                onAdd={(channel) => setScheduleDialog({ channel })}
+                onSetLocation={() => setLocationOpen(true)}
+              />
+            )}
+          </CardContent>
+        </Card>
 
+        <div className="grid gap-6">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -281,7 +272,7 @@ export function DeviceDetail({ deviceId }: { deviceId: string }) {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <dl className="grid grid-cols-[auto,1fr] gap-x-6 gap-y-2 text-sm">
+              <dl className="grid grid-cols-[auto,1fr] gap-x-6 gap-y-2 text-sm md:grid-cols-[auto,1fr,auto,1fr]">
                 <dt className="text-muted-foreground">Board</dt>
                 <dd>{config?.board_type ?? '—'}</dd>
                 <dt className="text-muted-foreground">Channels</dt>
@@ -290,6 +281,21 @@ export function DeviceDetail({ deviceId }: { deviceId: string }) {
                 <dd>{config ? (config.interlock_enabled ? 'Enabled' : 'Disabled') : '—'}</dd>
                 <dt className="text-muted-foreground">Last seen</dt>
                 <dd>{device.is_online ? 'Now' : timeAgo(device.last_seen_at)}</dd>
+                <dt className="text-muted-foreground">Clock</dt>
+                <dd>{config ? formatUtcOffset(config.utc_offset_min) : '—'}</dd>
+                <dt className="text-muted-foreground">Location</dt>
+                <dd className="flex flex-wrap items-center gap-2">
+                  {config?.location_set && config.latitude != null && config.longitude != null
+                    ? `${config.latitude.toFixed(3)}, ${config.longitude.toFixed(3)}`
+                    : config
+                      ? 'Not set'
+                      : '—'}
+                  {config && (
+                    <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setLocationOpen(true)}>
+                      <MapPin /> {config.location_set ? 'Change' : 'Set location'}
+                    </Button>
+                  )}
+                </dd>
               </dl>
             </CardContent>
           </Card>
@@ -322,6 +328,21 @@ export function DeviceDetail({ deviceId }: { deviceId: string }) {
       </div>
 
       <RenameDialog device={device} open={renameOpen} onOpenChange={setRenameOpen} />
+      <ScheduleDialog
+        targets={[target]}
+        initialDeviceId={device.device_id}
+        initialChannel={scheduleDialog?.channel}
+        existing={scheduleDialog?.existing ?? null}
+        open={scheduleDialog != null}
+        onOpenChange={(o) => !o && setScheduleDialog(null)}
+      />
+      <LocationDialog
+        deviceId={device.device_id}
+        deviceName={name}
+        config={config}
+        open={locationOpen}
+        onOpenChange={setLocationOpen}
+      />
       {editing && (
         <SwitchConfigDialog
           view={switches.find((s) => s.id === editing.id) ?? editing}

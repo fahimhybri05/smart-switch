@@ -3,6 +3,9 @@
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
+  BarChart3,
+  Boxes,
+  CalendarClock,
   ChevronDown,
   Cpu,
   Gauge,
@@ -13,9 +16,11 @@ import {
   Menu,
   PlugZap,
   ScrollText,
+  Sparkles,
   UserRound,
   Users,
   X,
+  Zap,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -43,6 +48,11 @@ type NavItem = { href: string; label: string; icon: typeof LayoutGrid; exact?: b
 
 const NAV: NavItem[] = [
   { href: '/', label: 'Overview', icon: LayoutGrid },
+  { href: '/scenes', label: 'Scenes', icon: Sparkles },
+  { href: '/groups', label: 'Groups', icon: Boxes },
+  { href: '/schedules', label: 'Schedules', icon: CalendarClock },
+  { href: '/automations', label: 'Automations', icon: Zap },
+  { href: '/usage', label: 'Usage', icon: BarChart3 },
   { href: '/household', label: 'Household', icon: Home },
   { href: '/integrations', label: 'API & Integrations', icon: PlugZap },
   { href: '/activity', label: 'Activity', icon: Activity },

@@ -49,6 +49,7 @@ const SOURCE_LABELS: Record<string, string> = {
   api: 'API',
   hook: 'Hook URL',
   dashboard: 'Web dashboard',
+  safety: 'Safety auto-off',
 };
 
 export function sourceLabel(source: ActivitySource): string {

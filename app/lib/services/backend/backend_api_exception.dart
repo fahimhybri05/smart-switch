@@ -2,14 +2,19 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../api_error_body.dart';
+
 /// Thrown on any non-2xx response from the backend. Shared by every
 /// backend/* client — mirrors DeviceApiException's shape in
 /// device_api_client.dart.
 class BackendApiException implements Exception {
-  BackendApiException(this.statusCode, this.message);
+  BackendApiException(this.statusCode, this.message, {this.retryAfterSeconds});
 
   final int statusCode;
   final String message;
+
+  /// See `DeviceApiException.retryAfterSeconds`.
+  final int? retryAfterSeconds;
 
   @override
   String toString() => 'BackendApiException($statusCode): $message';
@@ -24,14 +29,15 @@ Future<Map<String, dynamic>> decodeBackendResponseOrThrow(
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
-  String message = 'HTTP ${resp.statusCode}';
+  var error = const ApiErrorBody();
   try {
-    final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
-    if (decoded['error'] is String) {
-      message = decoded['error'] as String;
-    }
+    error = ApiErrorBody.parse(jsonDecode(resp.body));
   } catch (_) {
     // body wasn't JSON — keep the generic message
   }
-  throw BackendApiException(resp.statusCode, message);
+  throw BackendApiException(
+    resp.statusCode,
+    error.code ?? 'HTTP ${resp.statusCode}',
+    retryAfterSeconds: error.retryAfterSeconds,
+  );
 }

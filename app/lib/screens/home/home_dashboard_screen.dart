@@ -6,12 +6,14 @@ import '../../models/device/channel_state.dart';
 import '../../models/device/device_config.dart';
 import '../../models/local/household.dart';
 import '../../models/local/known_device.dart';
+import '../../models/local/scene.dart';
 import '../../providers/service_providers.dart';
 import '../../routing/app_routes.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
 import '../shared/device_sync_gate.dart';
+import '../scenes/scene_runner.dart';
 import '../shared/device_tile.dart';
 import '../shared/skeleton_loader.dart';
 
@@ -187,6 +189,8 @@ class HomeDashboardScreen extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Scenes are backend-only — hidden when signed out.
+                    if (ref.watch(authProvider) != null) const _ScenesRow(),
                     if (zones.isNotEmpty) ...[
                       const SizedBox(height: Spacing.lg),
                       const _SectionLabel('Rooms'),
@@ -404,6 +408,136 @@ class _InviteBannerState extends ConsumerState<_InviteBanner> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Horizontal one-tap scene cards (see scene_runner.dart). Tap runs the
+/// scene; "Manage" opens the Scenes screen. With no scenes yet, a single
+/// "New scene" card points there instead.
+class _ScenesRow extends ConsumerStatefulWidget {
+  const _ScenesRow();
+
+  @override
+  ConsumerState<_ScenesRow> createState() => _ScenesRowState();
+}
+
+class _ScenesRowState extends ConsumerState<_ScenesRow> {
+  final Set<int> _running = {};
+
+  Future<void> _run(Scene scene) async {
+    if (_running.contains(scene.id)) return;
+    setState(() => _running.add(scene.id));
+    try {
+      await runSceneWithFeedback(context, ref, scene);
+    } finally {
+      if (mounted) setState(() => _running.remove(scene.id));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scenes = ref.watch(scenesProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: Spacing.lg),
+        Row(
+          children: [
+            const Expanded(child: _SectionLabel('Scenes')),
+            TextButton(
+              onPressed: () => Navigator.pushNamed(context, AppRoutes.scenes),
+              child: const Text('Manage'),
+            ),
+          ],
+        ),
+        SizedBox(
+          height: 88,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: scenes.isEmpty ? 1 : scenes.length,
+            separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
+            itemBuilder: (context, i) => scenes.isEmpty
+                ? _SceneCard(
+                    icon: Icons.add_rounded,
+                    label: 'New scene',
+                    busy: false,
+                    onTap: () =>
+                        Navigator.pushNamed(context, AppRoutes.scenes),
+                  )
+                : _SceneCard(
+                    icon: sceneIconData(scenes[i].icon),
+                    label: scenes[i].name,
+                    busy: _running.contains(scenes[i].id),
+                    onTap: () => _run(scenes[i]),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SceneCard extends StatelessWidget {
+  const _SceneCard({
+    required this.icon,
+    required this.label,
+    required this.busy,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool busy;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 120,
+      child: Material(
+        color: colorScheme.secondaryContainer,
+        shape: const RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.all(Radius.circular(22)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: busy ? null : onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(Spacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                busy
+                    ? SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: colorScheme.onSecondaryContainer,
+                        ),
+                      )
+                    : Icon(
+                        icon,
+                        size: 22,
+                        color: colorScheme.onSecondaryContainer,
+                      ),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: colorScheme.onSecondaryContainer,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

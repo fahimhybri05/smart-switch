@@ -4,8 +4,9 @@ import { Cpu, Power, Smartphone, Wifi } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { EmptyState, ErrorState, HouseholdSelect, PageHeader } from '@/components/common';
+import { SceneQuickRow } from '@/components/scenes/scene-quick-row';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useDevices, useHouseholds, useSelectedHousehold, useSwitchViews } from '@/lib/queries';
+import { useDevices, useHouseholds, useSelectedHousehold, useSwitchLabeler, useSwitchViews } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
 import { DeviceCard } from './device-card';
@@ -42,6 +43,7 @@ export function Overview() {
 
   const { byDevice, configsLoading } = useSwitchViews(devices);
 
+  const labelFor = useSwitchLabeler(byDevice, devicesQuery.data);
   const allSwitches = useMemo(() => [...byDevice.values()].flat(), [byDevice]);
   const zones = useMemo(() => {
     const set = new Set(allSwitches.map((s) => s.zone).filter(Boolean));
@@ -89,6 +91,7 @@ export function Overview() {
         </EmptyState>
       ) : (
         <div className="grid gap-6">
+          <SceneQuickRow householdId={selected?.id} ready={!households.isLoading} labelFor={labelFor} />
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Stat icon={Wifi} label="Devices online" value={`${online}/${devices.length}`} />
             <Stat icon={Power} label="Switches on" value={`${onCount}/${allSwitches.length}`} />

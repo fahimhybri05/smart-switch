@@ -10,6 +10,7 @@ import {
   startDeviceScheduler,
   waitForCurrentDeviceScheduleTick,
 } from './deviceSchedules/scheduler.js';
+import { startSafetyScheduler, waitForCurrentSafetyTick } from './safety/scheduler.js';
 import {
   authenticateClientUpgrade,
   handleClientConnection,
@@ -127,6 +128,7 @@ server.listen(port, host, () => {
 
 const stopAutomationScheduler = startAutomationScheduler();
 const stopDeviceScheduler = startDeviceScheduler();
+const stopSafetyScheduler = startSafetyScheduler();
 const deviceHeartbeatInterval = startDeviceHeartbeat();
 
 // Lets `systemctl restart`/`stop` (or a plain Ctrl-C) close cleanly instead
@@ -142,6 +144,7 @@ async function shutdown(signal) {
   console.log(`${signal} received, shutting down`);
   stopAutomationScheduler();
   stopDeviceScheduler();
+  stopSafetyScheduler();
   clearInterval(deviceHeartbeatInterval);
 
   const forceExitTimer = setTimeout(() => {
@@ -156,7 +159,7 @@ async function shutdown(signal) {
   // dropped on every deploy. The existing 10s forceExitTimer above remains
   // the ultimate backstop.
   await Promise.race([
-    Promise.all([waitForCurrentTick(), waitForCurrentDeviceScheduleTick()]),
+    Promise.all([waitForCurrentTick(), waitForCurrentDeviceScheduleTick(), waitForCurrentSafetyTick()]),
     sleep(5000),
   ]);
 

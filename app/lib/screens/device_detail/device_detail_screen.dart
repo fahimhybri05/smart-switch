@@ -3,13 +3,18 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/device/channel_state.dart';
+import '../../models/device/switch_config.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/spacing.dart';
 import '../shared/device_visualization.dart';
+import '../shared/edit_switch_dialog.dart';
 import '../shared/error_view.dart';
+import '../shared/friendly_error.dart';
 import '../shared/loading_view.dart';
+import '../shared/lock_badge.dart';
+import '../shared/usage_bars.dart';
 
 class DeviceDetailScreen extends ConsumerWidget {
   const DeviceDetailScreen({super.key, required this.device});
@@ -77,11 +82,12 @@ class DeviceDetailScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: Spacing.sm),
                 for (final switchConfig in value.switches)
-                  _ChannelRow(
-                    device: device,
-                    channelIdx: switchConfig.channelIdx,
-                    name: switchConfig.name,
-                  ),
+                  _ChannelRow(device: device, switchConfig: switchConfig),
+                // Usage stats come from the backend — hidden when signed out.
+                if (ref.watch(authProvider) != null) ...[
+                  const SizedBox(height: Spacing.lg),
+                  _UsageSection(device: device),
+                ],
               ],
             ),
           );
@@ -245,15 +251,13 @@ class _StatusTag extends StatelessWidget {
 }
 
 class _ChannelRow extends ConsumerWidget {
-  const _ChannelRow({
-    required this.device,
-    required this.channelIdx,
-    required this.name,
-  });
+  const _ChannelRow({required this.device, required this.switchConfig});
 
   final KnownDevice device;
-  final int channelIdx;
-  final String name;
+  final SwitchConfig switchConfig;
+
+  int get channelIdx => switchConfig.channelIdx;
+  String get name => switchConfig.name;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -308,7 +312,15 @@ class _ChannelRow extends ConsumerWidget {
             ),
           ),
         ),
-        title: Text(name),
+        title: Row(
+          children: [
+            Flexible(child: Text(name, overflow: TextOverflow.ellipsis)),
+            if (switchConfig.locked) ...[
+              const SizedBox(width: Spacing.xs),
+              const SwitchLockBadge(),
+            ],
+          ],
+        ),
         subtitle: Text(
           isOn ? 'ON' : 'OFF',
           style: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -331,6 +343,10 @@ class _ChannelRow extends ConsumerWidget {
   }
 
   Future<void> _toggle(BuildContext context, WidgetRef ref, bool value) async {
+    if (switchConfig.locked) {
+      showSwitchLockedSnackBar(context);
+      return;
+    }
     HapticFeedback.lightImpact();
     final desired = value ? ChannelPowerState.on : ChannelPowerState.off;
     ref
@@ -341,9 +357,9 @@ class _ChannelRow extends ConsumerWidget {
       await client.setChannelState(channelIdx, desired);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to toggle: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(friendlyErrorMessage(e, 'Toggle'))),
+        );
       }
     } finally {
       // Re-poll right away instead of waiting up to 2s for the next tick,
@@ -351,5 +367,92 @@ class _ChannelRow extends ConsumerWidget {
       // above expires.
       ref.invalidate(channelStatesProvider(device));
     }
+  }
+}
+
+/// Per-switch daily ON time for this device (`GET /devices/:id/usage`),
+/// with a 7/30-day toggle, totals, and kWh where the switch has watts set.
+class _UsageSection extends ConsumerStatefulWidget {
+  const _UsageSection({required this.device});
+
+  final KnownDevice device;
+
+  @override
+  ConsumerState<_UsageSection> createState() => _UsageSectionState();
+}
+
+class _UsageSectionState extends ConsumerState<_UsageSection> {
+  int _days = 7;
+
+  @override
+  Widget build(BuildContext context) {
+    final key = (deviceId: widget.device.deviceId, days: _days);
+    final usage = ref.watch(deviceUsageProvider(key));
+    final colorScheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Usage',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            UsageRangeToggle(
+              days: _days,
+              onChanged: (d) => setState(() => _days = d),
+            ),
+          ],
+        ),
+        const SizedBox(height: Spacing.sm),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(Spacing.md),
+            child: usage.when(
+              skipLoadingOnReload: true,
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: Spacing.lg),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (e, _) => Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      friendlyErrorMessage(e, 'Loading usage'),
+                      style: TextStyle(color: colorScheme.error),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => ref.invalidate(deviceUsageProvider(key)),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+              data: (report) {
+                if (report.switches.isEmpty) {
+                  return const Text('No usage recorded yet.');
+                }
+                final maxSeconds = sharedUsageMax(report.switches);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    UsageTotals(report: report, days: _days),
+                    const Divider(height: Spacing.lg),
+                    for (final s in report.switches)
+                      UsageSwitchRow(
+                        usage: s,
+                        days: report.days,
+                        maxSeconds: maxSeconds,
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
