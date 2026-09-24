@@ -35,7 +35,7 @@ class HouseholdScreen extends ConsumerWidget {
             keyboardType: TextInputType.emailAddress,
             decoration: const InputDecoration(
               labelText: 'Email',
-              hintText: 'They must already have a Smart Switch account',
+              hintText: 'They must already have a Smart Control account',
             ),
             validator: (value) {
               final text = (value ?? '').trim();

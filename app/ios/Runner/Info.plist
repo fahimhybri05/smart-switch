@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Smart Switch</string>
+	<string>Smart Control</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>smart_switch</string>
+	<string>Smart Control</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -37,14 +37,14 @@
 	<!-- Required on iOS 14+ for both local-network HTTP calls and mDNS
 	     browsing (multicast_dns). -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Smart Switch discovers and controls relay devices on your local network.</string>
+	<string>Smart Control discovers and controls relay devices on your local network.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_esp-switch._tcp</string>
 	</array>
 	<!-- QR-code scanning for the Add Device wizard — see mobile_scanner. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Smart Switch scans the QR code on your device to set it up.</string>
+	<string>Smart Control scans the QR code on your device to set it up.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

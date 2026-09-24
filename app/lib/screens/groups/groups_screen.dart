@@ -360,7 +360,7 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
                   child: _MenuRow(
                     icon: Icons.flash_on_rounded,
                     label: 'Turn all on',
-                    color: menuScheme.primary,
+                    color: menuContext.panelColors.live,
                   ),
                 ),
                 PopupMenuItem(
@@ -368,7 +368,7 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
                   child: _MenuRow(
                     icon: Icons.power_settings_new_rounded,
                     label: 'Turn all off',
-                    color: menuScheme.onSurfaceVariant,
+                    color: menuScheme.error,
                   ),
                 ),
                 const PopupMenuDivider(),

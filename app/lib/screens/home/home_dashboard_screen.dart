@@ -89,9 +89,17 @@ class HomeDashboardScreen extends ConsumerWidget {
           );
     }
 
+    // Reachable devices first; offline ones sink to the end of the grid.
+    final orderedConfigs = [
+      for (final e in deviceConfigs)
+        if (!ref.watch(deviceUnreachableProvider(e.$1))) e,
+      for (final e in deviceConfigs)
+        if (ref.watch(deviceUnreachableProvider(e.$1))) e,
+    ];
+
     var totalSwitches = 0;
     final tiles = <Widget>[];
-    for (final (device, config) in deviceConfigs) {
+    for (final (device, config) in orderedConfigs) {
       totalSwitches += config.switches.length;
       for (final sw in config.switches) {
         final tileIndex = tiles.length;
@@ -198,7 +206,10 @@ class HomeDashboardScreen extends ConsumerWidget {
                               onCount: zones[i].switches
                                   .where(
                                     (z) => onKeys.contains(
-                                      _onKey(z.deviceId, z.switchConfig.channelIdx),
+                                      _onKey(
+                                        z.deviceId,
+                                        z.switchConfig.channelIdx,
+                                      ),
                                     ),
                                   )
                                   .length,
@@ -234,7 +245,9 @@ class HomeDashboardScreen extends ConsumerWidget {
                                   const SizedBox(width: Spacing.sm),
                                   Text(
                                     'No switches labeled yet.',
-                                    style: Theme.of(context).textTheme.bodyMedium
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
                                         ?.copyWith(
                                           color: colorScheme.onSurfaceVariant,
                                         ),
@@ -360,7 +373,9 @@ class _InviteBannerState extends ConsumerState<_InviteBanner> {
                     Expanded(
                       child: Text(
                         '${invite.invitedByEmail} invited you to "${invite.householdName}"',
-                        style: TextStyle(color: colorScheme.onSecondaryContainer),
+                        style: TextStyle(
+                          color: colorScheme.onSecondaryContainer,
+                        ),
                       ),
                     ),
                     if (_busy.contains(invite.id))
@@ -371,7 +386,8 @@ class _InviteBannerState extends ConsumerState<_InviteBanner> {
                       )
                     else ...[
                       TextButton(
-                        onPressed: () => setState(() => _dismissed.add(invite.id)),
+                        onPressed: () =>
+                            setState(() => _dismissed.add(invite.id)),
                         child: const Text('Later'),
                       ),
                       TextButton(
@@ -475,14 +491,16 @@ class _OverviewHero extends StatelessWidget {
         : '$onCount of $totalSwitches switches active';
 
     return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(28),
+      decoration: ShapeDecoration(
+        shape: const RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.all(Radius.circular(32)),
+        ),
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [panelColors.accent, panelColors.accentStrong],
         ),
-        boxShadow: [
+        shadows: [
           BoxShadow(
             color: colorScheme.primary.withValues(alpha: 0.28),
             blurRadius: 24,
@@ -504,9 +522,8 @@ class _OverviewHero extends StatelessWidget {
                     children: [
                       Text(
                         dateLabel,
-                        style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          color: onInk.withValues(alpha: 0.72),
-                        ),
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(color: onInk.withValues(alpha: 0.72)),
                       ),
                       const SizedBox(height: 2),
                       Text(
@@ -668,7 +685,9 @@ class _RoomCard extends StatelessWidget {
         color: active
             ? colorScheme.primaryContainer
             : colorScheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(20),
+        shape: const RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.all(Radius.circular(22)),
+        ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
@@ -679,7 +698,9 @@ class _RoomCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Icon(
-                  active ? Icons.meeting_room_rounded : Icons.meeting_room_outlined,
+                  active
+                      ? Icons.meeting_room_rounded
+                      : Icons.meeting_room_outlined,
                   size: 22,
                   color: active
                       ? colorScheme.onPrimaryContainer
@@ -703,7 +724,9 @@ class _RoomCard extends StatelessWidget {
                       onCount == 0 ? 'All off' : '$onCount of $total on',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: active
-                            ? colorScheme.onPrimaryContainer.withValues(alpha: 0.8)
+                            ? colorScheme.onPrimaryContainer.withValues(
+                                alpha: 0.8,
+                              )
                             : colorScheme.onSurfaceVariant,
                       ),
                     ),

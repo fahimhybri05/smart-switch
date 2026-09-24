@@ -20,7 +20,7 @@
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <application
-        android:label="smart_switch"
+        android:label="Smart Control"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
@@ -54,7 +54,7 @@
         <!-- Home-screen widget (Settings > Home screen widget) — see
              SmartSwitchWidgetProvider.kt. -->
         <receiver android:name=".SmartSwitchWidgetProvider" android:exported="true"
-            android:label="Smart Switch — grid">
+            android:label="Smart Control — grid">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
             </intent-filter>
@@ -65,7 +65,7 @@
         <!-- Single-switch widget, one switch per instance — see
              SingleSwitchWidgetProvider.kt / SingleSwitchConfigureActivity.kt. -->
         <receiver android:name=".SingleSwitchWidgetProvider" android:exported="true"
-            android:label="Smart Switch — single">
+            android:label="Smart Control — single">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
             </intent-filter>

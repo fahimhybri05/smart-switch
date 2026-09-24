@@ -31,7 +31,7 @@ class SingleSwitchConfigureActivity : Activity() {
         val pinned = WidgetRender.pinned(prefs)
         if (pinned.isEmpty()) {
             setContentView(TextView(this).apply {
-                text = "No pinned switches yet.\n\nOpen Smart Switch → Settings → Pinned switches, pin a switch, then add this widget again."
+                text = "No pinned switches yet.\n\nOpen Smart Control → Settings → Pinned switches, pin a switch, then add this widget again."
                 textSize = 16f
                 setPadding(48, 48, 48, 48)
             })

@@ -1,11 +1,11 @@
 {
-    "name": "smart_switch",
-    "short_name": "smart_switch",
+    "name": "Smart Control",
+    "short_name": "Smart Control",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#101827",
+    "theme_color": "#101827",
+    "description": "Control your smart switches.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

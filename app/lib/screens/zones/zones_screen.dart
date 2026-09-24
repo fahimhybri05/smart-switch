@@ -8,6 +8,7 @@ import '../../models/device/device_config.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../services/zone_aggregation_service.dart';
+import '../../theme/app_theme.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
 import '../shared/device_sync_gate.dart';
@@ -48,8 +49,11 @@ class ZonesScreen extends ConsumerWidget {
           ? (anyLoading
                 ? const SkeletonListPlaceholder()
                 : const EmptyStateView(
-                    icon: Icons.map_outlined,
-                    title: 'No switches labeled yet.',
+                    icon: Icons.meeting_room_outlined,
+                    title: 'No rooms yet',
+                    subtitle:
+                        'Give a switch a room: tap ⋯ on any switch, then '
+                        '"Edit name and room".',
                   ))
           : RefreshIndicator(
               onRefresh: () => refreshAllDevices(ref, devices),
@@ -130,11 +134,8 @@ class _ZoneSection extends ConsumerWidget {
                       children: [
                         Text(
                           zone.name,
-                          style: Theme.of(
-                            context,
-                          ).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
                         ),
                         Text(
                           '${members.length} ${members.length == 1 ? 'device' : 'devices'}',
@@ -148,15 +149,14 @@ class _ZoneSection extends ConsumerWidget {
                     tooltip: 'Turn room on',
                     onPressed: () => _toggleRoom(context, ref, members, true),
                     icon: Icons.flash_on_rounded,
-                    accent: true,
+                    color: context.panelColors.live,
                   ),
                   const SizedBox(width: Spacing.xs),
                   _PanelIconButton(
                     tooltip: 'Turn room off',
-                    onPressed: () =>
-                        _toggleRoom(context, ref, members, false),
+                    onPressed: () => _toggleRoom(context, ref, members, false),
                     icon: Icons.power_settings_new_rounded,
-                    accent: false,
+                    color: colorScheme.error,
                   ),
                 ],
               ),
@@ -258,29 +258,28 @@ class _PanelIconButton extends StatelessWidget {
     required this.tooltip,
     required this.onPressed,
     required this.icon,
-    required this.accent,
+    required this.color,
   });
 
   final String tooltip;
   final VoidCallback onPressed;
   final IconData icon;
-  final bool accent;
+
+  /// Tint for the icon; the background is a soft shade of the same color.
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     return IconButton(
       tooltip: tooltip,
       onPressed: onPressed,
       icon: Icon(icon, size: 19),
       style: IconButton.styleFrom(
-        foregroundColor: accent
-            ? colorScheme.onPrimaryContainer
-            : colorScheme.onSurfaceVariant,
-        backgroundColor: accent
-            ? colorScheme.primaryContainer
-            : colorScheme.surfaceContainerHigh,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        foregroundColor: color,
+        backgroundColor: color.withValues(alpha: 0.16),
+        shape: const RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.all(Radius.circular(14)),
+        ),
         minimumSize: const Size(48, 48),
         padding: EdgeInsets.zero,
       ),

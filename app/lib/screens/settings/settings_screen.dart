@@ -399,19 +399,21 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
           ),
-          const _SectionHeader(
-            icon: Icons.cloud_outlined,
-            label: 'Cloud account',
-          ),
-          _CloudAccountCard(
-            auth: ref.watch(authProvider),
-            backendUrl: ref.watch(backendUrlProvider),
-            onSetBackendUrl: (url) =>
-                ref.read(backendUrlProvider.notifier).setBackendUrl(url),
-            onLogin: () => Navigator.of(context).pushNamed(AppRoutes.login),
-            onSignup: () => Navigator.of(context).pushNamed(AppRoutes.signup),
-            onLogout: () => ref.read(authProvider.notifier).logout(),
-          ),
+          if (_showCloudAndBackup) ...[
+            const _SectionHeader(
+              icon: Icons.cloud_outlined,
+              label: 'Cloud account',
+            ),
+            _CloudAccountCard(
+              auth: ref.watch(authProvider),
+              backendUrl: ref.watch(backendUrlProvider),
+              onSetBackendUrl: (url) =>
+                  ref.read(backendUrlProvider.notifier).setBackendUrl(url),
+              onLogin: () => Navigator.of(context).pushNamed(AppRoutes.login),
+              onSignup: () => Navigator.of(context).pushNamed(AppRoutes.signup),
+              onLogout: () => ref.read(authProvider.notifier).logout(),
+            ),
+          ],
           const _SectionHeader(
             icon: Icons.family_restroom_outlined,
             label: 'Household',
@@ -584,51 +586,62 @@ class SettingsScreen extends ConsumerWidget {
             child: ListTile(
               leading: const _RowIconBox(Icons.widgets_outlined),
               title: const Text('Pinned switches'),
-              subtitle: const Text('Choose up to 4 switches to pin (Android)'),
+              subtitle: const Text(
+                'Choose switches for the home-screen widgets',
+              ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => showPinnedSwitchesDialog(context),
             ),
           ),
-          const _SectionHeader(icon: Icons.backup_outlined, label: 'Backup'),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const _RowIconBox(Icons.upload_outlined),
-                  title: const Text('Export backup'),
-                  subtitle: const Text(
-                    'Known devices, groups, and a config snapshot',
+          if (_showCloudAndBackup) ...[
+            const _SectionHeader(icon: Icons.backup_outlined, label: 'Backup'),
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const _RowIconBox(Icons.upload_outlined),
+                    title: const Text('Export backup'),
+                    subtitle: const Text(
+                      'Known devices, groups, and a config snapshot',
+                    ),
+                    onTap: () => _exportBackup(context, ref),
                   ),
-                  onTap: () => _exportBackup(context, ref),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const _RowIconBox(Icons.download_outlined),
-                  title: const Text('Import backup'),
-                  subtitle: const Text('Restores known devices and groups'),
-                  onTap: () => _importBackup(context, ref),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: Spacing.lg),
-            child: Center(
-              child: Text(
-                'Smart Switch — ESP32/8266 relay control, local-first with optional cloud relay.\nVersion 1.0.0',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                  height: 1.5,
-                ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const _RowIconBox(Icons.download_outlined),
+                    title: const Text('Import backup'),
+                    subtitle: const Text('Restores known devices and groups'),
+                    onTap: () => _importBackup(context, ref),
+                  ),
+                ],
               ),
             ),
-          ),
+          ],
+          // The cloud account card (hidden above) is where Log out normally
+          // lives — keep sign-out reachable while it's hidden.
+          if (!_showCloudAndBackup && ref.watch(authProvider) != null) ...[
+            const SizedBox(height: Spacing.md),
+            Card(
+              child: ListTile(
+                leading: Icon(Icons.logout_rounded, color: colorScheme.error),
+                title: Text(
+                  'Log out',
+                  style: TextStyle(color: colorScheme.error),
+                ),
+                subtitle: Text(ref.watch(authProvider)!.email),
+                onTap: () => ref.read(authProvider.notifier).logout(),
+              ),
+            ),
+          ],
+          const SizedBox(height: Spacing.lg),
         ],
       ),
     );
   }
 }
+
+// Cloud account + Backup sections are hidden for now; flip to bring them back.
+const _showCloudAndBackup = false;
 
 /// Icon + label used inside a [PopupMenuItem] — gives the known-devices
 /// overflow menu the same icon-led weight as the rest of the settings list

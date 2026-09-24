@@ -182,27 +182,65 @@ ThemeData _buildTheme(Brightness brightness) {
     tertiary: panelTokens.live,
     onTertiary: isDark ? const Color(0xFF0A3818) : Colors.white,
     tertiaryContainer: Color.lerp(panelTokens.live, baseScheme.surface, 0.8)!,
-    onTertiaryContainer: Color.lerp(panelTokens.live, baseScheme.onSurface, 0.2)!,
+    onTertiaryContainer: Color.lerp(
+      panelTokens.live,
+      baseScheme.onSurface,
+      0.2,
+    )!,
     secondary: panelTokens.warn,
     onSecondary: isDark ? const Color(0xFF3D2900) : Colors.white,
     secondaryContainer: Color.lerp(panelTokens.warn, baseScheme.surface, 0.8)!,
-    onSecondaryContainer: Color.lerp(panelTokens.warn, baseScheme.onSurface, 0.2)!,
+    onSecondaryContainer: Color.lerp(
+      panelTokens.warn,
+      baseScheme.onSurface,
+      0.2,
+    )!,
   );
 
   final ink = colorScheme.onSurface;
   final baseTextTheme = ThemeData(brightness: brightness).textTheme;
-  final textTheme = GoogleFonts.archivoTextTheme(baseTextTheme).apply(
-    bodyColor: ink,
-    displayColor: ink,
-  ).copyWith(
-    displayLarge: GoogleFonts.archivoBlack(color: ink, fontSize: 57, height: 1.1),
-    displayMedium: GoogleFonts.archivoBlack(color: ink, fontSize: 45, height: 1.1),
-    displaySmall: GoogleFonts.archivo(color: ink, fontSize: 36, height: 1.15, fontWeight: FontWeight.w700),
-    headlineLarge: GoogleFonts.archivo(color: ink, fontSize: 32, height: 1.15, fontWeight: FontWeight.w700),
-    headlineMedium: GoogleFonts.archivo(color: ink, fontSize: 28, height: 1.15, fontWeight: FontWeight.w700),
-    headlineSmall: GoogleFonts.archivo(color: ink, fontSize: 24, fontWeight: FontWeight.w700),
-    titleLarge: GoogleFonts.archivo(color: ink, fontSize: 20, fontWeight: FontWeight.w600),
-  );
+  final textTheme = GoogleFonts.archivoTextTheme(baseTextTheme)
+      .apply(bodyColor: ink, displayColor: ink)
+      .copyWith(
+        displayLarge: GoogleFonts.archivoBlack(
+          color: ink,
+          fontSize: 57,
+          height: 1.1,
+        ),
+        displayMedium: GoogleFonts.archivoBlack(
+          color: ink,
+          fontSize: 45,
+          height: 1.1,
+        ),
+        displaySmall: GoogleFonts.archivo(
+          color: ink,
+          fontSize: 36,
+          height: 1.15,
+          fontWeight: FontWeight.w700,
+        ),
+        headlineLarge: GoogleFonts.archivo(
+          color: ink,
+          fontSize: 32,
+          height: 1.15,
+          fontWeight: FontWeight.w700,
+        ),
+        headlineMedium: GoogleFonts.archivo(
+          color: ink,
+          fontSize: 28,
+          height: 1.15,
+          fontWeight: FontWeight.w700,
+        ),
+        headlineSmall: GoogleFonts.archivo(
+          color: ink,
+          fontSize: 24,
+          fontWeight: FontWeight.w700,
+        ),
+        titleLarge: GoogleFonts.archivo(
+          color: ink,
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+        ),
+      );
 
   return ThemeData(
     useMaterial3: true,
@@ -235,10 +273,37 @@ ThemeData _buildTheme(Brightness brightness) {
     dividerTheme: DividerThemeData(color: colorScheme.outlineVariant),
     cardTheme: CardThemeData(
       elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(24)),
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       color: colorScheme.surfaceContainerLow,
       surfaceTintColor: colorScheme.surfaceTint,
+    ),
+    // Same smooth "squircle" corners as the cards, for every surface that
+    // pops up over the app.
+    dialogTheme: DialogThemeData(
+      shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(28)),
+    ),
+    bottomSheetTheme: const BottomSheetThemeData(
+      shape: RoundedSuperellipseBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(18)),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        shape: RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+        shape: RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+      ),
     ),
     navigationBarTheme: NavigationBarThemeData(
       elevation: 1,
@@ -246,19 +311,28 @@ ThemeData _buildTheme(Brightness brightness) {
       backgroundColor: colorScheme.surfaceContainer,
       indicatorColor: colorScheme.secondaryContainer,
       labelTextStyle: WidgetStatePropertyAll(
-        GoogleFonts.archivo(fontWeight: FontWeight.w600, color: ink, fontSize: 12),
+        GoogleFonts.archivo(
+          fontWeight: FontWeight.w600,
+          color: ink,
+          fontSize: 12,
+        ),
       ),
     ),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: colorScheme.surfaceContainer,
       indicatorColor: colorScheme.secondaryContainer,
       selectedIconTheme: IconThemeData(color: colorScheme.onSecondaryContainer),
-      selectedLabelTextStyle: GoogleFonts.archivo(color: ink, fontWeight: FontWeight.w600),
+      selectedLabelTextStyle: GoogleFonts.archivo(
+        color: ink,
+        fontWeight: FontWeight.w600,
+      ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
         textStyle: GoogleFonts.archivo(fontWeight: FontWeight.w600),
       ),
     ),
@@ -277,15 +351,15 @@ ThemeData _buildTheme(Brightness brightness) {
       contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
     ),
     listTileTheme: ListTileThemeData(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(14)),
       contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
     ),
     chipTheme: ChipThemeData(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(20)),
     ),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(16)),
     ),
     switchTheme: SwitchThemeData(
       thumbIcon: WidgetStateProperty.resolveWith((states) {
@@ -305,7 +379,7 @@ ThemeData _buildTheme(Brightness brightness) {
     floatingActionButtonTheme: FloatingActionButtonThemeData(
       backgroundColor: colorScheme.primaryContainer,
       foregroundColor: colorScheme.onPrimaryContainer,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(18)),
     ),
   );
 }

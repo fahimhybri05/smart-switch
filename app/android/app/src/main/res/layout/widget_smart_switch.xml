@@ -21,7 +21,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="Smart Switch"
+            android:text="Smart Control"
             android:textColor="@color/widget_text"
             android:textSize="15sp"
             android:textStyle="bold"/>

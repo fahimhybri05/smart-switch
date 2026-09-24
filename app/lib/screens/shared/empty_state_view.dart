@@ -27,7 +27,25 @@ class EmptyStateView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 48, color: colorScheme.outline)
+            // Icon in a soft tinted squircle — same shape language as the
+            // rest of the app, friendlier than a bare grey glyph.
+            DecoratedBox(
+                  decoration: ShapeDecoration(
+                    color: colorScheme.primaryContainer.withValues(alpha: 0.6),
+                    shape: const RoundedSuperellipseBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(32)),
+                    ),
+                  ),
+                  child: SizedBox(
+                    width: 96,
+                    height: 96,
+                    child: Icon(
+                      icon,
+                      size: 44,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                )
                 .animate()
                 .fadeIn(duration: Motion.medium, curve: Motion.standard)
                 .scaleXY(
@@ -36,10 +54,12 @@ class EmptyStateView extends StatelessWidget {
                   duration: Motion.medium,
                   curve: Curves.easeOutBack,
                 ),
-            const SizedBox(height: Spacing.md),
+            const SizedBox(height: Spacing.lg),
             Text(
               title,
-              style: Theme.of(context).textTheme.titleMedium,
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               textAlign: TextAlign.center,
             ),
             if (subtitle != null) ...[

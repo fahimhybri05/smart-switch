@@ -71,121 +71,164 @@ class DeviceTile extends ConsumerWidget {
         ? DeviceVisualState.on
         : DeviceVisualState.off;
 
-    final backgroundColor = colorScheme.surfaceContainerLow;
     final foregroundColor = isOn
         ? colorScheme.onPrimaryContainer
         : colorScheme.onSurfaceVariant;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(28),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: isOffline
-              ? null
-              : () => _toggle(context, ref, !isOn),
-          child: AnimatedContainer(
-            duration: Motion.medium,
-            curve: Curves.easeOut,
-            decoration: BoxDecoration(
-              color: backgroundColor,
-              border: Border.all(
-                color: isOn
-                    ? colorScheme.primary.withValues(alpha: 0.25)
-                    : colorScheme.outlineVariant.withValues(alpha: 0.45),
+    // Superellipse ("squircle") corners — smoother than a plain circular
+    // radius. The decoration sits outside the clip so the ON glow isn't cut.
+    const radius = BorderRadius.all(Radius.circular(32));
+    return AnimatedContainer(
+      duration: Motion.medium,
+      curve: Curves.easeOut,
+      decoration: ShapeDecoration(
+        // ON reads at a glance: the whole card takes the accent, not just
+        // the drawn switch plate.
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isOn
+              ? [
+                  colorScheme.primaryContainer,
+                  Color.alphaBlend(
+                    colorScheme.primary.withValues(alpha: 0.18),
+                    colorScheme.primaryContainer,
+                  ),
+                ]
+              : [
+                  colorScheme.surfaceContainerLow,
+                  colorScheme.surfaceContainerLow,
+                ],
+        ),
+        shape: RoundedSuperellipseBorder(
+          borderRadius: radius,
+          side: BorderSide(
+            color: isOn
+                ? colorScheme.primary.withValues(alpha: 0.45)
+                : colorScheme.outlineVariant.withValues(alpha: 0.45),
+            width: isOn ? 1.5 : 1,
+          ),
+        ),
+        shadows: [
+          BoxShadow(
+            color: isOn
+                ? colorScheme.primary.withValues(alpha: 0.28)
+                : Colors.transparent,
+            blurRadius: 20,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: ClipRSuperellipse(
+        borderRadius: radius,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            customBorder: const RoundedSuperellipseBorder(borderRadius: radius),
+            onTap: isOffline ? null : () => _toggle(context, ref, !isOn),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spacing.md,
+                vertical: Spacing.sm,
               ),
-            ),
-            padding: const EdgeInsets.symmetric(
-              horizontal: Spacing.md,
-              vertical: Spacing.sm,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    _StateDot(state: visualState, color: foregroundColor),
-                    const Spacer(),
-                    // PopupMenuButton's default IconButton enforces a 48x48
-                    // min tap target regardless of the icon's own size —
-                    // shrinkWrap removes that so this header row doesn't
-                    // claim far more vertical space than its 20px icon
-                    // actually needs, which was overflowing this tile's
-                    // fixed grid-cell height by ~21px.
-                    Theme(
-                      data: Theme.of(context).copyWith(
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: PopupMenuButton<String>(
-                        padding: const EdgeInsets.all(4),
-                        icon: Icon(
-                          Icons.more_horiz_rounded,
-                          size: 20,
-                          color: foregroundColor.withValues(alpha: 0.7),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      isOffline
+                          ? const _OfflineBadge()
+                          : _StateDot(
+                              state: visualState,
+                              color: foregroundColor,
+                            ),
+                      const Spacer(),
+                      // PopupMenuButton's default IconButton enforces a 48x48
+                      // min tap target regardless of the icon's own size —
+                      // shrinkWrap removes that so this header row doesn't
+                      // claim far more vertical space than its 20px icon
+                      // actually needs, which was overflowing this tile's
+                      // fixed grid-cell height by ~21px.
+                      Theme(
+                        data: Theme.of(context).copyWith(
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                         ),
-                        onSelected: (value) {
-                          if (value == 'details') {
-                            Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) =>
-                                    DeviceDetailScreen(device: device),
-                              ),
-                            );
-                          } else if (value == 'edit') {
-                            _edit(context, ref);
-                          }
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(
-                            value: 'details',
-                            child: Text('Open device'),
+                        child: PopupMenuButton<String>(
+                          padding: const EdgeInsets.all(4),
+                          icon: Icon(
+                            Icons.more_horiz_rounded,
+                            size: 20,
+                            color: foregroundColor.withValues(alpha: 0.7),
                           ),
-                          PopupMenuItem(
-                            value: 'edit',
-                            child: Text('Edit name and room'),
-                          ),
-                        ],
+                          onSelected: (value) {
+                            if (value == 'details') {
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) =>
+                                      DeviceDetailScreen(device: device),
+                                ),
+                              );
+                            } else if (value == 'edit') {
+                              _edit(context, ref);
+                            }
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: 'details',
+                              child: Text('Open device'),
+                            ),
+                            PopupMenuItem(
+                              value: 'edit',
+                              child: Text('Edit name and room'),
+                            ),
+                          ],
+                        ),
                       ),
+                    ],
+                  ),
+                  DeviceVisualization(
+                    kind: _kindFor(switchConfig.name),
+                    state: visualState,
+                    height: 112,
+                    onTap: isOffline
+                        ? null
+                        : () => _toggle(context, ref, !isOn),
+                  ),
+                  AnimatedDefaultTextStyle(
+                    duration: Motion.medium,
+                    style: Theme.of(context).textTheme.titleMedium!.copyWith(
+                      color: foregroundColor,
+                      fontWeight: isOn ? FontWeight.w800 : FontWeight.w600,
                     ),
-                  ],
-                ),
-                DeviceVisualization(
-                  kind: _kindFor(switchConfig.name),
-                  state: visualState,
-                  height: 112,
-                  onTap: isOffline
-                      ? null
-                      : () => _toggle(context, ref, !isOn),
-                ),
-                AnimatedDefaultTextStyle(
-                  duration: Motion.medium,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleMedium!.copyWith(color: foregroundColor),
-                  child: Text(
-                    switchConfig.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    child: Text(
+                      switchConfig.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                AnimatedDefaultTextStyle(
-                  duration: Motion.medium,
-                  style: Theme.of(context).textTheme.bodySmall!.copyWith(
-                    color: foregroundColor.withValues(alpha: 0.8),
+                  const SizedBox(height: 2),
+                  AnimatedDefaultTextStyle(
+                    duration: Motion.medium,
+                    style: Theme.of(context).textTheme.bodySmall!.copyWith(
+                      color: isOn
+                          ? colorScheme.primary
+                          : foregroundColor.withValues(alpha: 0.8),
+                      fontWeight: isOn ? FontWeight.w700 : FontWeight.w400,
+                    ),
+                    child: Text(
+                      isOffline
+                          ? 'Offline'
+                          : isLoading
+                          ? 'Connecting'
+                          : isOn
+                          ? 'On'
+                          : 'Off',
+                    ),
                   ),
-                  child: Text(
-                    isOffline
-                        ? 'Offline'
-                        : isLoading
-                        ? 'Connecting'
-                        : isOn
-                        ? 'On'
-                        : 'Off',
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -270,6 +313,40 @@ class _StateDot extends StatelessWidget {
         boxShadow: isActive
             ? [BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 8)]
             : null,
+      ),
+    );
+  }
+}
+
+/// Replaces the state dot on an unreachable tile so "can't control this
+/// right now" is explicit rather than just a dimmed card.
+class _OfflineBadge extends StatelessWidget {
+  const _OfflineBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final error = Theme.of(context).colorScheme.error;
+    return DecoratedBox(
+      decoration: ShapeDecoration(
+        color: error.withValues(alpha: 0.14),
+        shape: const StadiumBorder(),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cloud_off_rounded, size: 13, color: error),
+            const SizedBox(width: 4),
+            Text(
+              'Offline',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: error,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

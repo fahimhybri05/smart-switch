@@ -353,26 +353,7 @@ class _AuthForm extends StatelessWidget {
               subtitle: const Text('Stay signed in on this device'),
             ),
           const SizedBox(height: Spacing.md),
-          if (backendUrl != null)
-            Row(
-              children: [
-                Icon(
-                  Icons.cloud_done_rounded,
-                  size: 18,
-                  color: colorScheme.primary,
-                ),
-                const SizedBox(width: Spacing.xs),
-                Expanded(
-                  child: Text(
-                    'Connected to your Smart Switch server',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ],
-            )
-          else
+          if (backendUrl == null)
             Text(
               'Set a backend server URL in Settings first.',
               style: TextStyle(color: colorScheme.error),
@@ -436,24 +417,26 @@ class _BrandHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Container(
-          width: compact ? 52 : 64,
-          height: compact ? 52 : 64,
-          decoration: BoxDecoration(
-            color: colorScheme.primary,
-            borderRadius: BorderRadius.circular(18),
-            boxShadow: [
+        // App logo (assets/branding/logo.png — already has rounded,
+        // transparent corners, so no clip needed).
+        DecoratedBox(
+          decoration: ShapeDecoration(
+            shape: const RoundedSuperellipseBorder(
+              borderRadius: BorderRadius.all(Radius.circular(18)),
+            ),
+            shadows: [
               BoxShadow(
-                color: colorScheme.primary.withValues(alpha: 0.35),
-                blurRadius: 16,
+                color: const Color(0xFF3DDC97).withValues(alpha: 0.28),
+                blurRadius: 18,
                 offset: const Offset(0, 6),
               ),
             ],
           ),
-          child: Icon(
-            Icons.bolt_rounded,
-            color: colorScheme.onPrimary,
-            size: compact ? 28 : 34,
+          child: Image.asset(
+            'assets/branding/logo.png',
+            width: compact ? 56 : 68,
+            height: compact ? 56 : 68,
+            filterQuality: FilterQuality.medium,
           ),
         ),
         const SizedBox(width: Spacing.md),
@@ -461,7 +444,7 @@ class _BrandHeader extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Smart Switch',
+              'Smart Control',
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
                 fontWeight: FontWeight.w700,
                 color: colorScheme.primary,
@@ -545,7 +528,7 @@ class _WelcomePanel extends StatelessWidget {
           ),
           const Spacer(),
           Text(
-            'Smart Switch',
+            'Smart Control',
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
               color: colorScheme.onPrimary.withValues(alpha: 0.58),
               fontWeight: FontWeight.w600,

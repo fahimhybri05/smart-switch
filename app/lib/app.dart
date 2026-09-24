@@ -54,7 +54,7 @@ class _SmartSwitchAppState extends ConsumerState<SmartSwitchApp>
       ..remove(AppRoutes.home);
 
     return MaterialApp(
-      title: 'Smart Switch',
+      title: 'Smart Control',
       theme: lightTheme,
       darkTheme: darkTheme,
       themeMode: ref.watch(themeModeProvider),
