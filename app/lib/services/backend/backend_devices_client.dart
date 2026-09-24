@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../../models/device/device_health.dart';
 import 'backend_api_exception.dart';
 
 const _requestTimeout = Duration(seconds: 8);
@@ -84,6 +85,16 @@ class BackendDevicesClient {
         )
         .timeout(_requestTimeout);
     await decodeBackendResponseOrThrow(resp);
+  }
+
+  Future<DeviceHealth> health(String deviceId) async {
+    final resp = await http
+        .get(
+          _uri('/devices/${Uri.encodeComponent(deviceId)}/health'),
+          headers: _headers,
+        )
+        .timeout(_requestTimeout);
+    return DeviceHealth.fromJson(await decodeBackendResponseOrThrow(resp));
   }
 
   Future<void> unclaim(String deviceId) async {

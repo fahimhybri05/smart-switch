@@ -15,7 +15,10 @@ import '../../services/backend/backend_api_exception.dart';
 import '../../services/backend/backend_devices_client.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
+import '../device_health/device_health_screen.dart';
 import '../shared/pinned_switches_dialog.dart';
+import 'about_screen.dart';
+import 'app_lock_settings.dart';
 
 typedef NetworkDialogResult = ({
   String mode,
@@ -31,6 +34,9 @@ typedef DeviceSettingsDialogResult = ({
   double? longitude,
 });
 
+/// Settings hub: short grouped list (Account, General, Household, Devices,
+/// Home screen & shortcuts, About). Per-device management lives one level
+/// down in [DevicesSettingsScreen].
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
@@ -80,6 +86,261 @@ class SettingsScreen extends ConsumerWidget {
       }
     }
   }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final devices = ref.watch(knownDevicesProvider);
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Settings')),
+      body: ListView(
+        padding: const EdgeInsets.symmetric(vertical: Spacing.sm),
+        children: [
+          if (ref.watch(authProvider) case final auth?) ...[
+            const _SectionHeader(
+              icon: Icons.person_outline_rounded,
+              label: 'Account',
+            ),
+            Card(
+              child: ListTile(
+                leading: CircleAvatar(
+                  radius: 18,
+                  backgroundColor: colorScheme.primaryContainer,
+                  child: Text(
+                    auth.email.isEmpty ? '?' : auth.email[0].toUpperCase(),
+                    style: TextStyle(
+                      color: colorScheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                title: Text(
+                  auth.email,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: const Text('Email, password and account deletion'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).pushNamed(AppRoutes.account),
+              ),
+            ),
+          ],
+          const _SectionHeader(icon: Icons.tune_rounded, label: 'General'),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(Spacing.md),
+              child: SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: ThemeMode.light,
+                    icon: Icon(Icons.light_mode_outlined),
+                    label: Text('Light'),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.dark,
+                    icon: Icon(Icons.dark_mode_outlined),
+                    label: Text('Dark'),
+                  ),
+                  ButtonSegment(
+                    value: ThemeMode.system,
+                    icon: Icon(Icons.brightness_auto_outlined),
+                    label: Text('System'),
+                  ),
+                ],
+                selected: {ref.watch(themeModeProvider)},
+                onSelectionChanged: (selection) => ref
+                    .read(themeModeProvider.notifier)
+                    .setThemeMode(selection.first),
+              ),
+            ),
+          ),
+          const AppLockSettingsCard(),
+          if (_showCloudAndBackup) ...[
+            const _SectionHeader(
+              icon: Icons.cloud_outlined,
+              label: 'Cloud account',
+            ),
+            _CloudAccountCard(
+              auth: ref.watch(authProvider),
+              backendUrl: ref.watch(backendUrlProvider),
+              onSetBackendUrl: (url) =>
+                  ref.read(backendUrlProvider.notifier).setBackendUrl(url),
+              onLogin: () => Navigator.of(context).pushNamed(AppRoutes.login),
+              onSignup: () => Navigator.of(context).pushNamed(AppRoutes.signup),
+              onLogout: () => ref.read(authProvider.notifier).logout(),
+            ),
+          ],
+          const _SectionHeader(
+            icon: Icons.family_restroom_outlined,
+            label: 'Household',
+          ),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const _RowIconBox(Icons.family_restroom_outlined),
+                  title: const Text('Manage household'),
+                  subtitle: const Text('Who can see and control your devices'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      Navigator.of(context).pushNamed(AppRoutes.household),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const _RowIconBox(Icons.history_outlined),
+                  title: const Text('Activity history'),
+                  subtitle: const Text('Every switch on/off event'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      Navigator.of(context).pushNamed(AppRoutes.activity),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const _RowIconBox(Icons.bolt_outlined),
+                  title: const Text('Automations'),
+                  subtitle: const Text('Rules that run on their own'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      Navigator.of(context).pushNamed(AppRoutes.automations),
+                ),
+                if (kShowScenes) ...[
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const _RowIconBox(Icons.auto_awesome_outlined),
+                    title: const Text('Scenes'),
+                    subtitle: const Text('Set several switches with one tap'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () =>
+                        Navigator.of(context).pushNamed(AppRoutes.scenes),
+                  ),
+                ],
+                const Divider(height: 1),
+                ListTile(
+                  leading: const _RowIconBox(Icons.insights_outlined),
+                  title: const Text('Usage'),
+                  subtitle: const Text('On time and energy per switch'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).pushNamed(AppRoutes.usage),
+                ),
+              ],
+            ),
+          ),
+          const _SectionHeader(
+            icon: Icons.developer_board_outlined,
+            label: 'Devices',
+          ),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const _RowIconBox(Icons.developer_board_outlined),
+                  title: const Text('Your devices'),
+                  subtitle: Text(
+                    devices.isEmpty
+                        ? 'None yet'
+                        : '${devices.length} device${devices.length == 1 ? '' : 's'} · network, timezone, health',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const DevicesSettingsScreen(),
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const _RowIconBox(Icons.add_circle_outline),
+                  title: const Text('Add device'),
+                  subtitle: const Text('Set up a new Smart Control device'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      Navigator.of(context).pushNamed(AppRoutes.addDevice),
+                ),
+              ],
+            ),
+          ),
+          const _SectionHeader(
+            icon: Icons.widgets_outlined,
+            label: 'Home screen & shortcuts',
+          ),
+          Card(
+            child: ListTile(
+              leading: const _RowIconBox(Icons.push_pin_outlined),
+              title: const Text('Pinned switches'),
+              subtitle: const Text(
+                'Used by widgets, app-icon shortcuts and the Quick Settings tile',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => showPinnedSwitchesDialog(context),
+            ),
+          ),
+          if (_showCloudAndBackup) ...[
+            const _SectionHeader(icon: Icons.backup_outlined, label: 'Backup'),
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const _RowIconBox(Icons.upload_outlined),
+                    title: const Text('Export backup'),
+                    subtitle: const Text(
+                      'Known devices, groups, and a config snapshot',
+                    ),
+                    onTap: () => _exportBackup(context, ref),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const _RowIconBox(Icons.download_outlined),
+                    title: const Text('Import backup'),
+                    subtitle: const Text('Restores known devices and groups'),
+                    onTap: () => _importBackup(context, ref),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const _SectionHeader(
+            icon: Icons.info_outline_rounded,
+            label: 'About',
+          ),
+          Card(
+            child: ListTile(
+              leading: const _RowIconBox(Icons.info_outline_rounded),
+              title: const Text('About Smart Control'),
+              subtitle: const Text('Version, server and licenses'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
+              ),
+            ),
+          ),
+          // The cloud account card (hidden above) is where Log out normally
+          // lives — keep sign-out reachable while it's hidden.
+          if (!_showCloudAndBackup && ref.watch(authProvider) != null) ...[
+            const SizedBox(height: Spacing.md),
+            Card(
+              child: ListTile(
+                leading: Icon(Icons.logout_rounded, color: colorScheme.error),
+                title: Text(
+                  'Log out',
+                  style: TextStyle(color: colorScheme.error),
+                ),
+                subtitle: Text(ref.watch(authProvider)!.email),
+                onTap: () => ref.read(authProvider.notifier).logout(),
+              ),
+            ),
+          ],
+          const SizedBox(height: Spacing.lg),
+        ],
+      ),
+    );
+  }
+}
+
+/// Every known device with its management actions (rename, remote control,
+/// timezone, network, interlock/location, health, remove), plus add/scan.
+class DevicesSettingsScreen extends ConsumerWidget {
+  const DevicesSettingsScreen({super.key});
 
   Future<void> _renameDevice(
     BuildContext context,
@@ -364,116 +625,10 @@ class SettingsScreen extends ConsumerWidget {
     final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: const Text('Devices')),
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: Spacing.sm),
         children: [
-          const _SectionHeader(
-            icon: Icons.palette_outlined,
-            label: 'Appearance',
-          ),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(Spacing.md),
-              child: SegmentedButton<ThemeMode>(
-                segments: const [
-                  ButtonSegment(
-                    value: ThemeMode.light,
-                    icon: Icon(Icons.light_mode_outlined),
-                    label: Text('Light'),
-                  ),
-                  ButtonSegment(
-                    value: ThemeMode.dark,
-                    icon: Icon(Icons.dark_mode_outlined),
-                    label: Text('Dark'),
-                  ),
-                  ButtonSegment(
-                    value: ThemeMode.system,
-                    icon: Icon(Icons.brightness_auto_outlined),
-                    label: Text('System'),
-                  ),
-                ],
-                selected: {ref.watch(themeModeProvider)},
-                onSelectionChanged: (selection) => ref
-                    .read(themeModeProvider.notifier)
-                    .setThemeMode(selection.first),
-              ),
-            ),
-          ),
-          if (_showCloudAndBackup) ...[
-            const _SectionHeader(
-              icon: Icons.cloud_outlined,
-              label: 'Cloud account',
-            ),
-            _CloudAccountCard(
-              auth: ref.watch(authProvider),
-              backendUrl: ref.watch(backendUrlProvider),
-              onSetBackendUrl: (url) =>
-                  ref.read(backendUrlProvider.notifier).setBackendUrl(url),
-              onLogin: () => Navigator.of(context).pushNamed(AppRoutes.login),
-              onSignup: () => Navigator.of(context).pushNamed(AppRoutes.signup),
-              onLogout: () => ref.read(authProvider.notifier).logout(),
-            ),
-          ],
-          const _SectionHeader(
-            icon: Icons.family_restroom_outlined,
-            label: 'Household',
-          ),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const _RowIconBox(Icons.family_restroom_outlined),
-                  title: const Text('Manage household'),
-                  subtitle: const Text('Who can see and control your devices'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () =>
-                      Navigator.of(context).pushNamed(AppRoutes.household),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const _RowIconBox(Icons.history_outlined),
-                  title: const Text('Activity history'),
-                  subtitle: const Text('Every switch on/off event'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () =>
-                      Navigator.of(context).pushNamed(AppRoutes.activity),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const _RowIconBox(Icons.bolt_outlined),
-                  title: const Text('Automations'),
-                  subtitle: const Text('Rules that run on their own'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () =>
-                      Navigator.of(context).pushNamed(AppRoutes.automations),
-                ),
-                if (kShowScenes) ...[
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const _RowIconBox(Icons.auto_awesome_outlined),
-                    title: const Text('Scenes'),
-                    subtitle: const Text('Set several switches with one tap'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () =>
-                        Navigator.of(context).pushNamed(AppRoutes.scenes),
-                  ),
-                ],
-                const Divider(height: 1),
-                ListTile(
-                  leading: const _RowIconBox(Icons.insights_outlined),
-                  title: const Text('Usage'),
-                  subtitle: const Text('On time and energy per switch'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.of(context).pushNamed(AppRoutes.usage),
-                ),
-              ],
-            ),
-          ),
-          const _SectionHeader(
-            icon: Icons.developer_board_outlined,
-            label: 'Known devices',
-          ),
           // Adding devices lives here once the home screen has devices (the
           // home screen only offers "Add device" while it's still empty).
           Card(
@@ -500,6 +655,10 @@ class SettingsScreen extends ConsumerWidget {
                 ),
               ],
             ),
+          ),
+          const _SectionHeader(
+            icon: Icons.developer_board_outlined,
+            label: 'Known devices',
           ),
           if (devices.isEmpty)
             const Padding(
@@ -533,6 +692,13 @@ class SettingsScreen extends ConsumerWidget {
                     icon: const Icon(Icons.more_horiz_rounded),
                     onSelected: (action) async {
                       switch (action) {
+                        case 'health':
+                          await Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  DeviceHealthScreen(device: device),
+                            ),
+                          );
                         case 'remote':
                           await _enableRemoteControl(context, ref, device);
                         case 'timezone':
@@ -584,6 +750,14 @@ class SettingsScreen extends ConsumerWidget {
                       }
                     },
                     itemBuilder: (context) => [
+                      if (ref.read(authProvider) != null)
+                        const PopupMenuItem(
+                          value: 'health',
+                          child: _MenuRow(
+                            icon: Icons.monitor_heart_outlined,
+                            label: 'Device health',
+                          ),
+                        ),
                       const PopupMenuItem(
                         value: 'remote',
                         child: _MenuRow(
@@ -625,61 +799,6 @@ class SettingsScreen extends ConsumerWidget {
                   ),
                 ),
               ),
-          const _SectionHeader(
-            icon: Icons.widgets_outlined,
-            label: 'Home screen widget',
-          ),
-          Card(
-            child: ListTile(
-              leading: const _RowIconBox(Icons.widgets_outlined),
-              title: const Text('Pinned switches'),
-              subtitle: const Text(
-                'Choose switches for the home-screen widgets',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => showPinnedSwitchesDialog(context),
-            ),
-          ),
-          if (_showCloudAndBackup) ...[
-            const _SectionHeader(icon: Icons.backup_outlined, label: 'Backup'),
-            Card(
-              child: Column(
-                children: [
-                  ListTile(
-                    leading: const _RowIconBox(Icons.upload_outlined),
-                    title: const Text('Export backup'),
-                    subtitle: const Text(
-                      'Known devices, groups, and a config snapshot',
-                    ),
-                    onTap: () => _exportBackup(context, ref),
-                  ),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const _RowIconBox(Icons.download_outlined),
-                    title: const Text('Import backup'),
-                    subtitle: const Text('Restores known devices and groups'),
-                    onTap: () => _importBackup(context, ref),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          // The cloud account card (hidden above) is where Log out normally
-          // lives — keep sign-out reachable while it's hidden.
-          if (!_showCloudAndBackup && ref.watch(authProvider) != null) ...[
-            const SizedBox(height: Spacing.md),
-            Card(
-              child: ListTile(
-                leading: Icon(Icons.logout_rounded, color: colorScheme.error),
-                title: Text(
-                  'Log out',
-                  style: TextStyle(color: colorScheme.error),
-                ),
-                subtitle: Text(ref.watch(authProvider)!.email),
-                onTap: () => ref.read(authProvider.notifier).logout(),
-              ),
-            ),
-          ],
           const SizedBox(height: Spacing.lg),
         ],
       ),

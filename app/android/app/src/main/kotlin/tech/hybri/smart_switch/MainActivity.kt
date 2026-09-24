@@ -12,14 +12,16 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 /// Android silently drops incoming multicast packets unless the app holds a
 /// WifiManager.MulticastLock — the `multicast_dns` package doesn't acquire
 /// this itself, so mDNS discovery finds nothing on a real device without it.
-class MainActivity : FlutterActivity() {
+// FlutterFragmentActivity (not FlutterActivity): local_auth's biometric
+// prompt is a fragment and needs a FragmentActivity host.
+class MainActivity : FlutterFragmentActivity() {
     private val multicastChannelName = "tech.hybri.smart_switch/multicast_lock"
     private var multicastLock: WifiManager.MulticastLock? = null
 

@@ -168,7 +168,8 @@ async function revalidate(deviceId, secretHash, diagnostics) {
 /** Returns the device's household id (null when unclaimed). */
 async function markOffline(deviceId) {
   const { rows } = await pool.query(
-    'UPDATE devices SET is_online = false WHERE device_id = $1 RETURNING household_id',
+    // last_seen_at doubles as "offline since" for the health view.
+    'UPDATE devices SET is_online = false, last_seen_at = now() WHERE device_id = $1 RETURNING household_id',
     [deviceId],
   );
   return rows[0]?.household_id ?? null;

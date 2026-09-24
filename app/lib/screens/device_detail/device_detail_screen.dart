@@ -8,6 +8,7 @@ import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/spacing.dart';
+import '../device_health/device_health_screen.dart';
 import '../shared/device_visualization.dart';
 import '../shared/edit_switch_dialog.dart';
 import '../shared/error_view.dart';
@@ -69,6 +70,11 @@ class DeviceDetailScreen extends ConsumerWidget {
                     _LiveStatusTag(device: device),
                   ],
                 ),
+                // Health comes from the backend — hidden when signed out.
+                if (ref.watch(authProvider) != null) ...[
+                  const SizedBox(height: Spacing.md),
+                  _HealthTile(device: device),
+                ],
                 const SizedBox(height: Spacing.lg),
                 Row(
                   children: [
@@ -453,6 +459,54 @@ class _UsageSectionState extends ConsumerState<_UsageSection> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// One-line health summary (signal + last restart) that opens the full
+/// [DeviceHealthScreen].
+class _HealthTile extends ConsumerWidget {
+  const _HealthTile({required this.device});
+
+  final KnownDevice device;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final health = ref
+        .watch(deviceHealthProvider(device.deviceId))
+        .asData
+        ?.value;
+    final signal = health?.rssi == null ? null : signalQuality(health!.rssi!);
+    final reset = health?.resetReason == null
+        ? null
+        : resetReasonInfo(health!.resetReason!);
+    final warn = (signal?.weak ?? false) || (reset?.problem ?? false);
+    final summary = health == null
+        ? 'Signal, uptime and restarts'
+        : [
+            if (signal != null) '${signal.label} signal',
+            if (health.uptimeS != null)
+              'up ${formatDuration(Duration(seconds: health.uptimeS!))}',
+            if (reset != null && reset.problem) reset.label.toLowerCase(),
+            if (!health.online) 'offline',
+          ].join(' · ');
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: Icon(
+          warn ? Icons.monitor_heart_outlined : Icons.favorite_outline_rounded,
+          color: warn ? colorScheme.error : colorScheme.primary,
+        ),
+        title: const Text('Device health'),
+        subtitle: Text(summary.isEmpty ? 'No details yet' : summary),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => DeviceHealthScreen(device: device),
+          ),
+        ),
+      ),
     );
   }
 }

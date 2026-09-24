@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../screens/account/account_screen.dart';
 import '../screens/activity/activity_screen.dart';
 import '../screens/auth/auth_screen.dart';
 import '../screens/automations/automations_screen.dart';
@@ -25,6 +26,7 @@ abstract final class AppRoutes {
   static const automations = '/automations';
   static const scenes = '/scenes';
   static const usage = '/usage';
+  static const account = '/account';
 
   static final Map<String, WidgetBuilder> routes = {
     home: (context) => const HomeShell(),
@@ -36,6 +38,7 @@ abstract final class AppRoutes {
     automations: (context) => const AutomationsScreen(),
     scenes: (context) => const ScenesScreen(),
     usage: (context) => const UsageScreen(),
+    account: (context) => const AccountScreen(),
     // Kept as "Advanced provisioning" (reconfigure-WiFi + troubleshooting),
     // reachable from Settings — the guided QR wizard above is now the
     // primary "+ Add Device" entry point. See docs/plan.md.

@@ -73,7 +73,7 @@ object WidgetRender {
         views.setOnClickPendingIntent(tileId, HomeWidgetBackgroundIntent.getBroadcast(context, toggleUri(entry)))
     }
 
-    private fun toggleUri(entry: JSONObject): Uri = Uri.parse(
+    fun toggleUri(entry: JSONObject): Uri = Uri.parse(
         "smartswitch://toggle" +
             "?device_id=${Uri.encode(entry.optString("device_id"))}" +
             "&ip=${Uri.encode(entry.optString("last_known_ip"))}" +

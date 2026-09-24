@@ -155,7 +155,9 @@ class AuthNotifier extends Notifier<AuthState> {
   }
 
   Future<void> _rememberCredentials(String email, String password) =>
-      _rememberMe ? CredentialStore.save(email, password) : CredentialStore.clear();
+      _rememberMe
+      ? CredentialStore.save(email, password)
+      : CredentialStore.clear();
 
   Future<void> _persist(String email, TokenPair tokens) async {
     if (_rememberMe) {
@@ -192,6 +194,99 @@ class AuthNotifier extends Notifier<AuthState> {
       try {
         await _client().logout(current.refreshToken);
       } catch (_) {}
+    }
+    await _session.clear();
+    state = null;
+    _rememberMe = true;
+  }
+
+  Future<String> _freshToken() async {
+    final current = state;
+    if (current == null) {
+      throw StateError('not logged in');
+    }
+    return isJwtExpiredOrExpiringSoon(current.accessToken)
+        ? refreshAccessToken()
+        : current.accessToken;
+  }
+
+  Future<AccountInfo> fetchAccount() async => _client().me(await _freshToken());
+
+  /// Changes the password. Every other session is signed out by the backend;
+  /// this one continues on the returned tokens. Saved "Remember me"
+  /// credentials follow the new password so widgets/background sign-in
+  /// keep working.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final current = state;
+    if (current == null) {
+      throw StateError('not logged in');
+    }
+    final tokens = await _client().changePassword(
+      await _freshToken(),
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+    if (await CredentialStore.read() != null) {
+      await CredentialStore.save(current.email, newPassword);
+    }
+    if (_rememberMe) {
+      await _session.updateTokens(
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      );
+    }
+    state = (
+      email: current.email,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    );
+  }
+
+  /// Changes the sign-in email. The session, saved credentials and the
+  /// widget isolate's copy (which matches credentials by email) all move to
+  /// the new address together.
+  Future<void> changeEmail({
+    required String newEmail,
+    required String password,
+  }) async {
+    final current = state;
+    if (current == null) {
+      throw StateError('not logged in');
+    }
+    final email = await _client().changeEmail(
+      await _freshToken(),
+      newEmail: newEmail,
+      password: password,
+    );
+    if (await CredentialStore.read() != null) {
+      await CredentialStore.save(email, password);
+    }
+    final latest = state ?? current;
+    if (_rememberMe) {
+      await _session.saveSession(
+        accessToken: latest.accessToken,
+        refreshToken: latest.refreshToken,
+        email: email,
+      );
+    }
+    state = (
+      email: email,
+      accessToken: latest.accessToken,
+      refreshToken: latest.refreshToken,
+    );
+  }
+
+  /// Permanently deletes the account on the backend, then wipes everything
+  /// this phone kept for it: session, saved credentials and known devices.
+  Future<void> deleteAccount({required String password}) async {
+    await _client().deleteAccount(await _freshToken(), password: password);
+    await CredentialStore.clear();
+    final known = ref.read(knownDevicesProvider.notifier);
+    for (final device in [...ref.read(knownDevicesProvider)]) {
+      await known.remove(device.deviceId);
     }
     await _session.clear();
     state = null;
@@ -587,14 +682,14 @@ Future<void> _doSyncClaimedDevicesFromBackend(Ref ref) async {
   }
   try {
     await _fetchAndMergeClaimedDevices(ref, backendUrl)
-        // This opportunistic path is called unawaited from login/boot —
-        // shrink the worst case (token refresh + device list, ~8s each,
-        // sequential — up to ~16s) so a slow/unreachable backend fails
-        // fast into deviceSyncStatusProvider's error state instead of
-        // leaving the UI in a long false-empty-looking limbo. Other,
-        // explicit user-initiated calls elsewhere keep their own 8s
-        // timeouts unchanged.
-        .timeout(const Duration(seconds: 6));
+    // This opportunistic path is called unawaited from login/boot —
+    // shrink the worst case (token refresh + device list, ~8s each,
+    // sequential — up to ~16s) so a slow/unreachable backend fails
+    // fast into deviceSyncStatusProvider's error state instead of
+    // leaving the UI in a long false-empty-looking limbo. Other,
+    // explicit user-initiated calls elsewhere keep their own 8s
+    // timeouts unchanged.
+    .timeout(const Duration(seconds: 6));
   } catch (e, st) {
     // Still never swallowed silently forever — `flutter logs`/`adb
     // logcat` (or Xcode's console) shows this line, but the exception
@@ -881,7 +976,8 @@ class HouseholdInvitesNotifier extends Notifier<List<HouseholdInvite>> {
 /// (`save`/`remove`) require backend reachability, no silent local edits.
 class AutomationsNotifier extends Notifier<List<Automation>> {
   Future<BackendAutomationsClient> _requireClient() async {
-    if (ref.read(authProvider) == null || ref.read(backendUrlProvider) == null) {
+    if (ref.read(authProvider) == null ||
+        ref.read(backendUrlProvider) == null) {
       throw StateError('Log in to manage automations.');
     }
     final accessToken = await ensureFreshAccessTokenForNotifier(ref);
@@ -898,7 +994,8 @@ class AutomationsNotifier extends Notifier<List<Automation>> {
   }
 
   Future<void> refresh() async {
-    if (ref.read(authProvider) == null || ref.read(backendUrlProvider) == null) {
+    if (ref.read(authProvider) == null ||
+        ref.read(backendUrlProvider) == null) {
       state = const [];
       return;
     }
@@ -953,7 +1050,8 @@ final householdInvitesProvider =
 /// every access-token refresh.
 class ScenesNotifier extends Notifier<List<Scene>> {
   Future<BackendScenesClient> _requireClient() async {
-    if (ref.read(authProvider) == null || ref.read(backendUrlProvider) == null) {
+    if (ref.read(authProvider) == null ||
+        ref.read(backendUrlProvider) == null) {
       throw StateError('Log in to use scenes.');
     }
     final accessToken = await ensureFreshAccessTokenForNotifier(ref);
@@ -972,7 +1070,8 @@ class ScenesNotifier extends Notifier<List<Scene>> {
   }
 
   Future<void> refresh() async {
-    if (ref.read(authProvider) == null || ref.read(backendUrlProvider) == null) {
+    if (ref.read(authProvider) == null ||
+        ref.read(backendUrlProvider) == null) {
       state = const [];
       return;
     }

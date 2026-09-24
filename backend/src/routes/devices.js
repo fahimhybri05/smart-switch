@@ -249,6 +249,46 @@ devicesRouter.get('/:deviceId/config', async (req, res) => {
   res.json({ ...result.body, online: isDeviceOnline(req.params.deviceId) });
 });
 
+/**
+ * Connection health for the app's device health view: live online state,
+ * when it last connected / went offline, and the firmware diagnostics from
+ * its latest connect (see deviceServer.js extractDiagnostics). Uptime is
+ * extrapolated from the connect-time reading while the device stays online.
+ */
+devicesRouter.get('/:deviceId/health', async (req, res) => {
+  if (!(await requireMemberDevice(req, res))) return;
+  const { rows } = await pool.query(
+    `SELECT device_id, friendly_name, last_seen_at, last_connected_at, diagnostics, created_at
+       FROM devices WHERE device_id = $1`,
+    [req.params.deviceId],
+  );
+  const d = rows[0];
+  if (!d) return res.status(404).json({ error: 'device not found' });
+  const online = isDeviceOnline(d.device_id);
+  const diag = d.diagnostics ?? null;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  let uptimeS = null;
+  if (online && num(diag?.uptimeS) != null && diag?.at) {
+    const sinceReport = Math.max(0, (Date.now() - new Date(diag.at).getTime()) / 1000);
+    uptimeS = Math.round(diag.uptimeS + sinceReport);
+  }
+  res.json({
+    deviceId: d.device_id,
+    name: d.friendly_name ?? null,
+    online,
+    lastConnectedAt: d.last_connected_at ?? null,
+    // Only meaningful while offline: when the connection dropped.
+    offlineSince: online ? null : (d.last_seen_at ?? null),
+    addedAt: d.created_at ?? null,
+    firmware: diag?.fw != null ? String(diag.fw) : null,
+    resetReason: diag?.resetReason != null ? String(diag.resetReason) : null,
+    rssi: num(diag?.rssi),
+    freeHeap: num(diag?.freeHeap),
+    uptimeS,
+    reportedAt: diag?.at ?? null,
+  });
+});
+
 const switchPatchSchema = z.object({
   name: z.string().trim().max(64).optional(),
   zone: z.string().trim().max(64).optional(),

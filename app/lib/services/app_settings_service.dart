@@ -4,6 +4,8 @@ import 'package:hive_ce_flutter/hive_ce_flutter.dart';
 const _boxName = 'app_settings';
 const _themeModeKey = 'theme_mode';
 const _backendUrlKey = 'backend_url';
+const _appLockEnabledKey = 'app_lock_enabled';
+const _appLockTimeoutKey = 'app_lock_timeout_s';
 const _defaultBackendUrl = 'https://api.smart-switch.shop';
 
 /// Local, device-only app preferences (spec: visual overhaul pass) — today
@@ -60,5 +62,22 @@ class AppSettingsService {
 
   Future<void> setBackendUrl(String url) async {
     await _requireBox.put(_backendUrlKey, url.trim());
+  }
+
+  /// App lock (fingerprint/face/screen lock) — off by default.
+  bool getAppLockEnabled() =>
+      _requireBox.get(_appLockEnabledKey) as bool? ?? false;
+
+  Future<void> setAppLockEnabled(bool enabled) async {
+    await _requireBox.put(_appLockEnabledKey, enabled);
+  }
+
+  /// How long the app may sit in the background before it locks again;
+  /// 0 = every time it's reopened.
+  int getAppLockTimeoutSeconds() =>
+      _requireBox.get(_appLockTimeoutKey) as int? ?? 60;
+
+  Future<void> setAppLockTimeoutSeconds(int seconds) async {
+    await _requireBox.put(_appLockTimeoutKey, seconds);
   }
 }

@@ -5,6 +5,7 @@ import '../../models/device/device_config.dart';
 import '../../models/local/known_device.dart';
 import '../../models/local/pinned_switch.dart';
 import '../../providers/service_providers.dart';
+import '../../services/app_shortcuts.dart';
 import '../../services/battery_exemption.dart';
 import '../../services/widget_service.dart';
 
@@ -96,7 +97,7 @@ class _PinnedSwitchesDialogState extends ConsumerState<_PinnedSwitchesDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Home screen widget'),
+      title: const Text('Pinned switches'),
       content: SizedBox(width: double.maxFinite, child: _buildContent()),
       actions: [
         TextButton(
@@ -130,7 +131,7 @@ class _PinnedSwitchesDialogState extends ConsumerState<_PinnedSwitchesDialog> {
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Text(
-            'Pick up to $maxPinnedSwitches switches. The grid widget shows the first 4; single-switch widgets can use any of them.',
+            'Pick up to $maxPinnedSwitches switches. The grid widget and app-icon shortcuts use the first 4, the Quick Settings tile uses the first one, and single-switch widgets can use any of them.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ),
@@ -160,6 +161,7 @@ class _PinnedSwitchesDialogState extends ConsumerState<_PinnedSwitchesDialog> {
         .map((o) => o.pinned)
         .toList();
     await setPinnedSwitches(selected);
+    await refreshAppShortcuts();
     if (!mounted) return;
     Navigator.of(context).pop();
     // Without the exemption, Android blocks the widget's network while the

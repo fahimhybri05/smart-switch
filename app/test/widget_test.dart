@@ -61,6 +61,14 @@ class _FakeAppSettingsService implements AppSettingsService {
   Future<void> setBackendUrl(String url) async {}
   @override
   Future<void> close() async {}
+  @override
+  bool getAppLockEnabled() => false;
+  @override
+  Future<void> setAppLockEnabled(bool enabled) async {}
+  @override
+  int getAppLockTimeoutSeconds() => 60;
+  @override
+  Future<void> setAppLockTimeoutSeconds(int seconds) async {}
 }
 
 class _FakeAuthSessionService implements AuthSessionService {
