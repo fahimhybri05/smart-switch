@@ -29,6 +29,7 @@ import { toast } from 'sonner';
 import { Brand } from '@/components/brand';
 import { LiveIndicator } from '@/components/live-indicator';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { SETTINGS_SECTIONS } from '@/components/settings/sections';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -103,8 +104,73 @@ function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => v
   );
 }
 
-/** Pinned to the bottom of the sidebar, below the scrolling nav. */
-const SETTINGS_NAV: NavItem[] = [{ href: '/settings', label: 'Settings', icon: Settings }];
+/**
+ * Settings group pinned to the bottom of the sidebar. Its sections live here
+ * (not on the settings pages); it opens itself on any /settings route.
+ */
+function SettingsGroup({ onNavigate }: { onNavigate?: () => void }) {
+  const pathname = usePathname();
+  const inSettings = pathname === '/settings' || pathname.startsWith('/settings/');
+  const [open, setOpen] = useState(inSettings);
+  useEffect(() => {
+    if (inSettings) setOpen(true);
+  }, [inSettings]);
+
+  return (
+    <div className="grid gap-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls="settings-submenu"
+        className={cn(
+          'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors',
+          inSettings ? 'text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+        )}
+      >
+        <Settings className={cn('h-[18px] w-[18px]', inSettings ? 'text-brand-ink' : 'group-hover:text-foreground')} />
+        Settings
+        <ChevronDown
+          className={cn('ml-auto h-4 w-4 opacity-60 transition-transform duration-200', open && 'rotate-180')}
+        />
+      </button>
+      {/* grid-rows 0fr → 1fr animates the height without measuring it. */}
+      <div
+        id="settings-submenu"
+        className={cn(
+          'grid transition-[grid-template-rows,opacity] duration-200 ease-out',
+          open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+        )}
+        inert={!open}
+      >
+        <div className="overflow-hidden">
+          <div className="ml-[21px] grid gap-0.5 border-l pl-3">
+            {SETTINGS_SECTIONS.map(({ href, label, icon: Icon }) => {
+              const active = href === '/settings' ? pathname === href : pathname.startsWith(href);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={onNavigate}
+                  aria-current={active ? 'page' : undefined}
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',
+                    active
+                      ? 'bg-primary/15 text-foreground ring-1 ring-primary/30 dark:bg-primary/10'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                  )}
+                >
+                  <Icon className={cn('h-4 w-4', active && 'text-brand-ink')} />
+                  {label}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const { me } = useMe();
@@ -121,8 +187,8 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
           </>
         )}
       </nav>
-      <nav className="grid gap-1 border-t pt-4" aria-label="Settings">
-        <NavList items={SETTINGS_NAV} onNavigate={onNavigate} />
+      <nav className="border-t pt-4" aria-label="Settings">
+        <SettingsGroup onNavigate={onNavigate} />
       </nav>
     </>
   );

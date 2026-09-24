@@ -1,23 +1,37 @@
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, ExternalLink, LogOut, Monitor, Moon, ShieldCheck, Smartphone, Sun, type LucideIcon } from 'lucide-react';
+import {
+  Activity,
+  BarChart3,
+  Cpu,
+  Home,
+  LogOut,
+  Monitor,
+  Moon,
+  Power,
+  ShieldCheck,
+  Sun,
+  Zap,
+  type LucideIcon,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
-import { CopyField, PageHeader } from '@/components/common';
-import { SETTINGS_SECTIONS } from '@/components/settings/settings-nav';
+import { PageHeader } from '@/components/common';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { authApi, errorMessage } from '@/lib/api';
 import { formatDate } from '@/lib/format';
-import { useLiveStatus } from '@/lib/live';
-import { useMe } from '@/lib/queries';
+import { useDefaultHousehold } from '@/lib/preferences';
+import { useAutomations, useDevices, useHouseholds, useMe } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
 const THEMES: { value: string; label: string; icon: LucideIcon; preview: string }[] = [
@@ -25,12 +39,6 @@ const THEMES: { value: string; label: string; icon: LucideIcon; preview: string 
   { value: 'dark', label: 'Dark', icon: Moon, preview: 'bg-[#101827]' },
   { value: 'system', label: 'System', icon: Monitor, preview: 'bg-gradient-to-br from-[#f5f7fa] from-50% to-[#101827] to-50%' },
 ];
-
-const LIVE_TEXT = {
-  live: 'Connected — switch changes appear instantly.',
-  connecting: 'Connecting to live updates…',
-  offline: 'Live connection lost — refreshing every 10 seconds while reconnecting.',
-} as const;
 
 function Appearance() {
   const { theme, setTheme } = useTheme();
@@ -140,90 +148,161 @@ function Account() {
   );
 }
 
-function About({ apiUrl, version }: { apiUrl: string; version: string }) {
-  const status = useLiveStatus();
-  // Read after mount — the server has no idea of the browser's timezone.
-  const [timeZone, setTimeZone] = useState('—');
-  useEffect(() => setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone), []);
+const AUTO = 'auto';
+
+function YourHome() {
+  const households = useHouseholds();
+  const devices = useDevices();
+  const automations = useAutomations();
+  const loading = households.isLoading || devices.isLoading;
+
+  const list = devices.data ?? [];
+  const online = list.filter((d) => d.is_online).length;
+  const channels = list.flatMap((d) => d.channels);
+  const on = channels.filter((c) => c.state?.toUpperCase() === 'ON').length;
+  const autos = automations.data ?? [];
+  const autosOn = autos.filter((a) => a.enabled).length;
+
+  const stats: { icon: LucideIcon; label: string; value: string; href: string }[] = [
+    { icon: Cpu, label: 'Devices online', value: `${online} / ${list.length}`, href: '/' },
+    { icon: Power, label: 'Switches on now', value: `${on} / ${channels.length}`, href: '/' },
+    { icon: Zap, label: 'Automations on', value: `${autosOn} / ${autos.length}`, href: '/automations' },
+  ];
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Connection & about</CardTitle>
-        <CardDescription>Where this dashboard talks to, and what it runs.</CardDescription>
+        <CardTitle className="text-base">Your home</CardTitle>
+        <CardDescription>Everything your account can control, right now.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
-        <div className="flex items-start gap-3 text-sm">
-          <span
-            className={cn(
-              'mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full',
-              status === 'live' && 'bg-primary shadow-[0_0_8px_hsl(var(--brand))]',
-              status === 'connecting' && 'animate-pulse-dot bg-warning',
-              status === 'offline' && 'bg-muted-foreground',
-            )}
-          />
-          <span>
-            <span className="font-semibold">Live updates</span>
-            <span className="block text-muted-foreground">{LIVE_TEXT[status]}</span>
-          </span>
-        </div>
-        <div className="grid gap-1.5">
-          <div className="text-xs font-semibold text-muted-foreground">API base URL</div>
-          <CopyField value={apiUrl} label="Copy API URL" />
-          <a
-            href={`${apiUrl}/v1/openapi.json`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex w-fit items-center gap-1 text-xs font-semibold text-brand-ink hover:underline"
-          >
-            OpenAPI spec <ExternalLink className="h-3 w-3" />
-          </a>
-        </div>
-        <dl className="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <dt className="text-xs text-muted-foreground">Dashboard version</dt>
-            <dd className="font-semibold tabular-nums">v{version}</dd>
+        {loading ? (
+          <div className="grid grid-cols-3 gap-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-[70px] rounded-xl" />
+            ))}
           </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">Timezone (this browser)</dt>
-            <dd className="truncate font-semibold">{timeZone}</dd>
+        ) : (
+          <div className="grid grid-cols-3 gap-3">
+            {stats.map(({ icon: Icon, label, value, href }) => (
+              <Link
+                key={label}
+                href={href}
+                className="squircle border bg-muted/40 px-3 py-3 transition-colors hover:border-primary/40"
+              >
+                <Icon className="h-4 w-4 text-brand-ink" />
+                <div className="mt-2 text-lg font-bold leading-none tabular-nums">{value}</div>
+                <div className="mt-1 truncate text-xs text-muted-foreground">{label}</div>
+              </Link>
+            ))}
           </div>
-        </dl>
-        <div className="flex items-center gap-3 rounded-xl bg-muted/60 px-4 py-3 text-sm text-muted-foreground">
-          <Smartphone className="h-4 w-4 shrink-0" />
-          New devices are paired and claimed from the Smart Control mobile app.
+        )}
+        <div>
+          <div className="mb-2 text-xs font-semibold text-muted-foreground">Households</div>
+          {households.isLoading ? (
+            <Skeleton className="h-10 rounded-lg" />
+          ) : households.data?.length ? (
+            <ul className="-mx-2 grid">
+              {households.data.map((h) => {
+                const count = list.filter((d) => d.household_id === h.id).length;
+                return (
+                  <li key={h.id}>
+                    <Link
+                      href="/settings/household"
+                      className="flex items-center gap-3 rounded-lg px-2 py-2 text-sm transition-colors hover:bg-accent"
+                    >
+                      <Home className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate font-medium">{h.name}</span>
+                      <Badge variant={h.role === 'owner' ? 'default' : 'secondary'} className="capitalize">
+                        {h.role}
+                      </Badge>
+                      <span className="w-20 shrink-0 text-right text-xs text-muted-foreground">
+                        {count} device{count === 1 ? '' : 's'}
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">You&apos;re not in a household yet.</p>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/usage">
+              <BarChart3 /> Energy & usage
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/activity">
+              <Activity /> Recent activity
+            </Link>
+          </Button>
         </div>
       </CardContent>
     </Card>
   );
 }
 
-export function GeneralSettings({ apiUrl, version }: { apiUrl: string; version: string }) {
+function Preferences() {
+  const households = useHouseholds();
+  const [defaultId, setDefaultId] = useDefaultHousehold();
+  const list = households.data ?? [];
+  const current = list.some((h) => h.id === defaultId) ? String(defaultId) : AUTO;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Preferences</CardTitle>
+        <CardDescription>Saved in this browser.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-5">
+        <div className="grid gap-2">
+          <Label htmlFor="default-household">Open to household</Label>
+          <Select
+            value={current}
+            onValueChange={(v) => {
+              setDefaultId(v === AUTO ? null : Number(v));
+              toast.success('Default household saved');
+            }}
+            disabled={list.length < 2}
+          >
+            <SelectTrigger id="default-household" className="w-full sm:w-72">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={AUTO}>Automatic (the one you own)</SelectItem>
+              {list.map((h) => (
+                <SelectItem key={h.id} value={String(h.id)}>
+                  {h.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {list.length < 2
+              ? 'You have one household, so there is nothing to choose yet.'
+              : 'Overview, groups, schedules and usage start on this household.'}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function GeneralSettings() {
   return (
     <>
-      <PageHeader title="Settings" description="Appearance, account and everything else in one place." />
+      <PageHeader title="Settings" description="Your home, appearance and account." />
       <div className="grid gap-6">
-        <div className="grid gap-3 sm:grid-cols-3">
-          {SETTINGS_SECTIONS.slice(1).map(({ href, label, icon: Icon, description }) => (
-            <Link
-              key={href}
-              href={href}
-              className="squircle group flex items-center gap-3 border bg-card px-4 py-3 transition-all hover:-translate-y-0.5 hover:border-primary/40"
-            >
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-brand-ink">
-                <Icon className="h-[18px] w-[18px]" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold">{label}</span>
-                <span className="block truncate text-xs text-muted-foreground">{description}</span>
-              </span>
-              <ArrowRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-            </Link>
-          ))}
-        </div>
-        <Appearance />
-        <div className="grid gap-6 xl:grid-cols-2">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <YourHome />
           <Account />
-          <About apiUrl={apiUrl} version={version} />
+        </div>
+        <div className="grid gap-6 xl:grid-cols-2">
+          <Appearance />
+          <Preferences />
         </div>
       </div>
     </>

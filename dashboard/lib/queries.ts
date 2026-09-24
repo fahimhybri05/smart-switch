@@ -20,6 +20,7 @@ import {
 import { isChannelLocked, normalizeState, patchCachedSchedule, patchChannelLocked, patchChannelState, qk } from './cache';
 import { defaultChannelName, switchId } from './format';
 import { POLL_INTERVAL_MS, useLiveStatus } from './live';
+import { readDefaultHouseholdId } from './preferences';
 import type {
   Automation,
   AutomationInput,
@@ -221,8 +222,10 @@ export function useSelectedHousehold(households: Household[] | undefined) {
 
   const selected = useMemo(() => {
     if (!households?.length) return null;
+    const preferred = readDefaultHouseholdId(); // Settings → Preferences
     return (
       households.find((h) => h.id === raw) ??
+      households.find((h) => h.id === preferred) ??
       households.find((h) => h.role === 'owner') ??
       households[0]
     );
