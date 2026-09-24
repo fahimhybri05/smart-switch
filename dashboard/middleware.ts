@@ -28,6 +28,8 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!api/|_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|logo.png|logo-mark.png|robots.txt).*)',
+    // PWA files (manifest, service worker, icons, offline page) must load
+    // without a session — the browser fetches them outside any login.
+    '/((?!api/|_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|logo.png|logo-mark.png|robots.txt|manifest.webmanifest|sw.js|offline.html|icons/).*)',
   ],
 };

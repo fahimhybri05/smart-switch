@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Offline · Smart Control</title>
+    <style>
+      :root { color-scheme: dark light; --bg: #101827; --fg: #e8edf5; --muted: #8b97ab; --brand: #3ddc97; }
+      @media (prefers-color-scheme: light) { :root { --bg: #f5f7fa; --fg: #101827; --muted: #5b6678; --brand: #1c7d56; } }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px;
+             background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+      main { max-width: 360px; text-align: center; }
+      img { width: 88px; height: 88px; }
+      h1 { margin: 20px 0 6px; font-size: 22px; }
+      p { margin: 0 0 24px; color: var(--muted); }
+      button { border: 0; border-radius: 12px; padding: 10px 20px; font: inherit; font-weight: 700;
+               background: var(--brand); color: #101827; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/icons/icon-192.png" alt="" />
+      <h1>You're offline</h1>
+      <p>Smart Control needs an internet connection to reach your switches. It will reconnect as soon as you're back online.</p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+    <script>window.addEventListener('online', () => location.reload());</script>
+  </body>
+</html>

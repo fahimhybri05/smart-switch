@@ -22,6 +22,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { PageHeader } from '@/components/common';
+import { DesktopAppCard } from '@/components/install-app';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -304,6 +305,7 @@ export function GeneralSettings() {
           <Appearance />
           <Preferences />
         </div>
+        <DesktopAppCard />
       </div>
     </>
   );

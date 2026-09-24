@@ -1,4 +1,5 @@
 import { Brand } from '@/components/brand';
+import { InstallButton } from '@/components/install-app';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
@@ -11,7 +12,10 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       />
       <header className="relative z-10 flex items-center justify-between px-4 py-4 sm:px-8">
         <Brand />
-        <ThemeToggle />
+        <div className="flex items-center gap-2">
+          <InstallButton />
+          <ThemeToggle />
+        </div>
       </header>
       <main className="relative z-10 flex flex-1 items-center justify-center px-4 pb-16">
         <div className="w-full max-w-md">{children}</div>

@@ -27,6 +27,7 @@ import { Suspense, useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 
 import { Brand } from '@/components/brand';
+import { InstallButton } from '@/components/install-app';
 import { LiveIndicator } from '@/components/live-indicator';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { SETTINGS_SECTIONS } from '@/components/settings/sections';
@@ -293,6 +294,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Brand size={30} className="[&>span:last-child]:hidden sm:[&>span:last-child]:inline" />
             </Link>
             <div className="ml-auto flex items-center gap-1 sm:gap-2">
+              <InstallButton />
               <LiveIndicator />
               <ThemeToggle />
               <UserMenu />

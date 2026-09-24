@@ -6,6 +6,7 @@ import { useState, type ReactNode } from 'react';
 import { Toaster } from 'sonner';
 
 import { ApiError } from '@/lib/api';
+import { useServiceWorker } from '@/lib/install';
 
 function makeQueryClient() {
   return new QueryClient({
@@ -38,6 +39,7 @@ function ThemedToaster() {
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(makeQueryClient);
+  useServiceWorker();
   return (
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
       <QueryClientProvider client={queryClient}>

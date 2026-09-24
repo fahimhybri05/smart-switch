@@ -76,6 +76,11 @@ const nextConfig = {
     return [
       { source: '/:path*', headers: securityHeaders },
       {
+        // Browsers must re-check the service worker on every load so fixes ship.
+        source: '/sw.js',
+        headers: [{ key: 'Cache-Control', value: 'no-cache, max-age=0' }],
+      },
+      {
         // Never cache BFF/auth responses anywhere (they carry user data / tokens).
         source: '/api/:path*',
         headers: [{ key: 'Cache-Control', value: 'no-store, max-age=0' }],
