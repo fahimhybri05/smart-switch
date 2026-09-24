@@ -109,19 +109,15 @@ class _ProvisioningWizardScreenState
     } on ProvisioningException catch (e) {
       if (mounted) {
         setState(
-          () => _provisioningStatusText = friendlyErrorMessage(
-            e,
-            'Provisioning',
-          ),
+          () =>
+              _provisioningStatusText = friendlyErrorMessage(e, 'Provisioning'),
         );
       }
     } catch (e) {
       if (mounted) {
         setState(
-          () => _provisioningStatusText = friendlyErrorMessage(
-            e,
-            'Provisioning',
-          ),
+          () =>
+              _provisioningStatusText = friendlyErrorMessage(e, 'Provisioning'),
         );
       }
     } finally {

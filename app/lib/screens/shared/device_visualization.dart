@@ -118,7 +118,7 @@ class _DeviceVisualizationState extends State<DeviceVisualization>
                   kind: widget.kind,
                   state: widget.state,
                   progress: progress,
-                  gangCount: widget.gangCount.clamp(1, 4),
+                  gangCount: widget.gangCount.clamp(1, 6),
                   accent: accent,
                   pressed: _pressed,
                   panel: panel,
@@ -240,7 +240,12 @@ class _DevicePainter extends CustomPainter {
     final isDimmed =
         state == DeviceVisualState.offline || state == DeviceVisualState.error;
     final opacity = isDimmed ? 0.52 : 1.0;
-    final width = math.min(size.width * 0.64, 190.0);
+    // Fill most of the box, bounded by height so the plate (and its drop
+    // shadow below) never clips.
+    final width = math.min(
+      math.min(size.width * 0.77, size.height * 0.88 / 0.94),
+      220.0,
+    );
     final plateHeight = width * 0.94;
     final plate = Rect.fromCenter(
       center: center,
@@ -327,133 +332,146 @@ class _DevicePainter extends CustomPainter {
     }
   }
 
+  /// Modern screwless keypad: one key per gang, wrapping to two rows past
+  /// three so each key stays big enough to read.
   void _paintSwitch(Canvas canvas, Rect plate, double opacity) {
-    final frame = plate.deflate(plate.width * 0.16);
-    final gangWidth = frame.width / gangCount;
-    final frameShadow = Paint()
-      ..color = Colors.black.withValues(alpha: 0.12 * opacity)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        frame.shift(const Offset(0, 2)),
-        const Radius.circular(10),
-      ),
-      frameShadow,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(frame, const Radius.circular(10)),
-      Paint()..color = panel.plateLo.withValues(alpha: opacity),
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(frame.deflate(2), const Radius.circular(8)),
-      Paint()..color = panel.plateHi,
-    );
+    final n = gangCount;
+    final cols = n <= 3 ? n : (n == 4 ? 2 : 3);
+    final rows = (n / cols).ceil();
 
-    // The two fasteners are part of the physical product, not decoration.
-    final screwPaint = Paint()
-      ..color = panel.screw.withValues(alpha: opacity)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.9;
-    for (final x in [
-      plate.left + plate.width * 0.105,
-      plate.right - plate.width * 0.105,
-    ]) {
-      final screwCenter = Offset(x, plate.center.dy);
-      canvas.drawCircle(
-        screwCenter,
-        4.3,
-        Paint()..color = Color.lerp(panel.screw, panel.plateHi, 0.45)!,
-      );
-      canvas.drawCircle(screwCenter, 4.3, screwPaint);
-      canvas.drawLine(
-        screwCenter.translate(-1.8, 0),
-        screwCenter.translate(1.8, 0),
-        screwPaint,
-      );
-      canvas.drawLine(
-        screwCenter.translate(0, -1.8),
-        screwCenter.translate(0, 1.8),
-        screwPaint,
-      );
-    }
-
-    for (var i = 0; i < gangCount; i++) {
-      final left = frame.left + (i * gangWidth);
-      final offRocker = Rect.fromCenter(
-        center: Offset(
-          left + gangWidth / 2,
-          frame.center.dy + frame.height * 0.02,
-        ),
-        width: gangWidth * 0.58,
-        height: frame.height * 0.52,
-      );
-      final onRocker = Rect.fromLTWH(
-        left + gangWidth * 0.09,
-        frame.top + frame.height * 0.035,
-        gangWidth * 0.82,
-        frame.height * 0.91,
-      );
-      if (i > 0) {
-        canvas.drawLine(
-          Offset(left, frame.top + 4),
-          Offset(left, frame.bottom - 4),
-          Paint()
-            ..color = panel.plateLo.withValues(alpha: opacity)
-            ..strokeWidth = 1,
-        );
-      }
-      final rocker = Rect.lerp(offRocker, onRocker, progress)!;
-      final rockerPaint = Paint()
+    final bezel = plate.deflate(plate.shortestSide * 0.09);
+    final bezelRadius = Radius.circular(bezel.shortestSide * 0.16);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(bezel, bezelRadius),
+      Paint()
         ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
           colors: [
-            panel.paddleHi,
-            Color.lerp(panel.paddle, panel.paddleLo, progress)!,
+            panel.plateLo.withValues(alpha: opacity),
+            Color.lerp(
+              panel.plateLo,
+              panel.plateHi,
+              0.35,
+            )!.withValues(alpha: opacity),
           ],
-        ).createShader(rocker);
-      final rockerShadow = rocker.shift(const Offset(0, 3));
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(rockerShadow, const Radius.circular(6)),
-        Paint()..color = panel.sh.withValues(alpha: panel.sh.a * opacity),
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(rocker, const Radius.circular(6)),
-        rockerPaint,
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(rocker, const Radius.circular(6)),
-        Paint()
-          ..color = Color.lerp(
-            panel.paddleLo,
-            panel.screw,
-            0.4,
-          )!.withValues(alpha: opacity)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.4,
-      );
-      canvas.drawLine(
-        Offset(rocker.left + rocker.width * 0.18, rocker.top + 3),
-        Offset(rocker.right - rocker.width * 0.18, rocker.top + 3),
-        Paint()
-          ..color = panel.hi.withValues(alpha: panel.hi.a * opacity)
-          ..strokeWidth = 1,
-      );
+        ).createShader(bezel),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(bezel, bezelRadius),
+      Paint()
+        ..color = panel.hi.withValues(alpha: panel.hi.a * 0.8 * opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
 
-      final ledOn = progress > 0.5;
-      final ledRect = Rect.fromCenter(
-        center: Offset(rocker.center.dx, rocker.bottom - rocker.height * 0.09),
-        width: math.min(rocker.width * 0.28, 12),
-        height: 3,
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(ledRect, const Radius.circular(2)),
-        Paint()
-          ..color = ledOn
-              ? panel.live.withValues(alpha: opacity)
-              : panel.off.withValues(alpha: 0.6 * opacity),
+    final gap = bezel.shortestSide * 0.06;
+    final area = bezel.deflate(gap);
+    final keyWidth = (area.width - gap * (cols - 1)) / cols;
+    final keyHeight = (area.height - gap * (rows - 1)) / rows;
+    for (var i = 0; i < n; i++) {
+      final row = i ~/ cols;
+      final col = i % cols;
+      // A short last row (e.g. 5 = 3 + 2) is centred under the full one.
+      final inRow = row == rows - 1 ? n - cols * (rows - 1) : cols;
+      final rowOffset = (cols - inRow) * (keyWidth + gap) / 2;
+      _paintKey(
+        canvas,
+        Rect.fromLTWH(
+          area.left + rowOffset + col * (keyWidth + gap),
+          area.top + row * (keyHeight + gap),
+          keyWidth,
+          keyHeight,
+        ),
+        opacity,
       );
     }
+  }
+
+  void _paintKey(Canvas canvas, Rect key, double opacity) {
+    final radius = Radius.circular(key.shortestSide * 0.24);
+    // ON reads as pressed in: the key sinks a touch and its shadow shortens.
+    final face = key.deflate(progress * key.shortestSide * 0.03);
+    final faceRRect = RRect.fromRectAndRadius(face, radius);
+
+    canvas.drawRRect(
+      faceRRect.shift(Offset(0, 3 - 1.5 * progress)),
+      Paint()
+        ..color = panel.sh.withValues(alpha: panel.sh.a * opacity)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+    );
+    if (progress > 0) {
+      canvas.drawRRect(
+        faceRRect.inflate(2),
+        Paint()
+          ..color = panel.liveGlow.withValues(
+            alpha: panel.liveGlow.a * 0.6 * progress * opacity,
+          )
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+      );
+    }
+    canvas.drawRRect(
+      faceRRect,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            panel.paddleHi.withValues(alpha: opacity),
+            Color.lerp(
+              panel.paddle,
+              panel.paddleLo,
+              progress,
+            )!.withValues(alpha: opacity),
+          ],
+        ).createShader(face),
+    );
+    // Faint accent wash over the face while ON.
+    canvas.drawRRect(
+      faceRRect,
+      Paint()..color = panel.live.withValues(alpha: 0.10 * progress * opacity),
+    );
+    canvas.drawRRect(
+      faceRRect,
+      Paint()
+        ..color = Color.lerp(
+          panel.paddleLo,
+          progress > 0.5 ? panel.live : panel.screw,
+          0.35,
+        )!.withValues(alpha: opacity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2,
+    );
+    // Top-edge sheen.
+    canvas.drawLine(
+      Offset(face.left + face.width * 0.22, face.top + 2.5),
+      Offset(face.right - face.width * 0.22, face.top + 2.5),
+      Paint()
+        ..color = panel.hi.withValues(alpha: panel.hi.a * opacity)
+        ..strokeWidth = 1
+        ..strokeCap = StrokeCap.round,
+    );
+
+    final ledOn = progress > 0.5;
+    final ledCenter = Offset(face.center.dx, face.top + face.height * 0.2);
+    final ledRadius = (key.shortestSide * 0.055).clamp(2.0, 4.0);
+    if (ledOn) {
+      canvas.drawCircle(
+        ledCenter,
+        ledRadius * 2.4,
+        Paint()
+          ..color = panel.live.withValues(alpha: 0.45 * opacity)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+      );
+    }
+    canvas.drawCircle(
+      ledCenter,
+      ledRadius,
+      Paint()
+        ..color = ledOn
+            ? panel.live.withValues(alpha: opacity)
+            : panel.off.withValues(alpha: 0.55 * opacity),
+    );
   }
 
   void _paintPlug(Canvas canvas, Rect plate, double opacity) {
@@ -636,6 +654,8 @@ class _DevicePainter extends CustomPainter {
   }
 
   void _paintLight(Canvas canvas, Rect plate, double opacity) {
+    // Bulb drawn in units of an enlarged plate width so it reads at tile size.
+    final u = plate.width * 1.3;
     final center = plate.center.translate(0, -5);
     // Warm halo that gently breathes while ON.
     final breath = 0.5 + 0.5 * math.sin(pulse.value * math.pi * 2);
@@ -644,46 +664,43 @@ class _DevicePainter extends CustomPainter {
         0xFFFFC86B,
       ).withValues(alpha: (0.30 + 0.18 * breath) * progress * opacity)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16);
-    canvas.drawCircle(center, plate.width * (0.19 + 0.03 * breath), glow);
+    canvas.drawCircle(center, u * (0.19 + 0.03 * breath), glow);
     final bulb = Path()
-      ..moveTo(center.dx, center.dy - plate.width * 0.13)
+      ..moveTo(center.dx, center.dy - u * 0.13)
       ..cubicTo(
-        center.dx - plate.width * 0.12,
-        center.dy - plate.width * 0.13,
-        center.dx - plate.width * 0.15,
-        center.dy - plate.width * 0.01,
-        center.dx - plate.width * 0.07,
-        center.dy + plate.width * 0.07,
+        center.dx - u * 0.12,
+        center.dy - u * 0.13,
+        center.dx - u * 0.15,
+        center.dy - u * 0.01,
+        center.dx - u * 0.07,
+        center.dy + u * 0.07,
       )
-      ..lineTo(center.dx - plate.width * 0.05, center.dy + plate.width * 0.13)
-      ..lineTo(center.dx + plate.width * 0.05, center.dy + plate.width * 0.13)
-      ..lineTo(center.dx + plate.width * 0.07, center.dy + plate.width * 0.07)
+      ..lineTo(center.dx - u * 0.05, center.dy + u * 0.13)
+      ..lineTo(center.dx + u * 0.05, center.dy + u * 0.13)
+      ..lineTo(center.dx + u * 0.07, center.dy + u * 0.07)
       ..cubicTo(
-        center.dx + plate.width * 0.15,
-        center.dy - plate.width * 0.01,
-        center.dx + plate.width * 0.12,
-        center.dy - plate.width * 0.13,
+        center.dx + u * 0.15,
+        center.dy - u * 0.01,
+        center.dx + u * 0.12,
+        center.dy - u * 0.13,
         center.dx,
-        center.dy - plate.width * 0.13,
+        center.dy - u * 0.13,
       )
       ..close();
     canvas.drawPath(
       bulb,
       Paint()
-        ..shader =
-            RadialGradient(
-              colors: [
-                Color.lerp(Colors.white, const Color(0xFFFFC86B), progress)!,
-                const Color(0xFFE0E5E4),
-              ],
-            ).createShader(
-              Rect.fromCircle(center: center, radius: plate.width * 0.16),
-            ),
+        ..shader = RadialGradient(
+          colors: [
+            Color.lerp(Colors.white, const Color(0xFFFFC86B), progress)!,
+            const Color(0xFFE0E5E4),
+          ],
+        ).createShader(Rect.fromCircle(center: center, radius: u * 0.16)),
     );
     final base = Rect.fromCenter(
-      center: center.translate(0, plate.width * 0.145),
-      width: plate.width * 0.11,
-      height: plate.width * 0.07,
+      center: center.translate(0, u * 0.145),
+      width: u * 0.11,
+      height: u * 0.07,
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(base, const Radius.circular(3)),

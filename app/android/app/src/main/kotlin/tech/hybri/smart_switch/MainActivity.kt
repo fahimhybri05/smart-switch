@@ -8,6 +8,8 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
 import android.net.wifi.WifiManager
+import android.os.Build
+import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
@@ -34,6 +36,43 @@ class MainActivity : FlutterActivity() {
     // Saver / app standby block this app's network entirely unless it's on
     // the battery-optimization allowlist. See lib/services/battery_exemption.dart.
     private val batteryChannelName = "tech.hybri.smart_switch/battery"
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requestHighRefreshRate()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Some OEM skins drop the preference when the app comes back.
+        requestHighRefreshRate()
+    }
+
+    // Many Android phones (Samsung, OnePlus, Xiaomi…) keep apps at 60 Hz
+    // unless the window asks for more. Pick the fastest mode the panel offers
+    // at its current resolution — 90/120/144 Hz where available. The system
+    // can still lower it (battery saver, user's "standard" motion setting).
+    private fun requestHighRefreshRate() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            display
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay
+        } ?: return
+        val current = display.mode
+        val best = display.supportedModes
+            .filter {
+                it.physicalWidth == current.physicalWidth &&
+                    it.physicalHeight == current.physicalHeight
+            }
+            .maxByOrNull { it.refreshRate } ?: return
+        val attrs = window.attributes
+        if (attrs.preferredDisplayModeId != best.modeId) {
+            attrs.preferredDisplayModeId = best.modeId
+            window.attributes = attrs
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

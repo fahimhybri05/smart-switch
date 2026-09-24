@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -14,6 +16,7 @@ import { requireAuth } from '../middleware/auth.js';
 import {
   closeClientSockets,
   disconnectDevice,
+  getClientSocketStats,
   getOnlineDeviceIds,
   isDeviceOnline,
 } from '../ws/registry.js';
@@ -103,8 +106,186 @@ const LAST_ADMIN = 'this would leave no active admin; promote another admin firs
 /* Overview                                                                   */
 /* -------------------------------------------------------------------------- */
 
+const BACKEND_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version ?? null;
+  } catch {
+    return null;
+  }
+})();
+
+/**
+ * The richer half of GET /admin/stats: growth, engagement, trends, devices
+ * needing attention and process health. Each query degrades to empty on
+ * failure (logged) so one bad aggregate never takes down the whole overview.
+ * Day/hour buckets are in the database server's timezone.
+ */
+async function loadStatsDetails() {
+  const safe = (label, promise) =>
+    promise.catch((err) => {
+      console.error(`[admin/stats] ${label} failed:`, err.message);
+      return { rows: [] };
+    });
+  const dbStart = process.hrtime.bigint();
+  const [extra, daily, hourly, topDevices, claimedDevices, firmware, recentUsers] = await Promise.all([
+    safe('extra', pool.query(
+      `SELECT
+         (SELECT count(*) FROM users WHERE created_at > now() - interval '7 days') AS users_new_7d,
+         (SELECT count(*) FROM users WHERE created_at > now() - interval '30 days') AS users_new_30d,
+         (SELECT count(DISTINCT user_id) FROM refresh_tokens WHERE created_at > now() - interval '24 hours') AS users_active_24h,
+         (SELECT count(DISTINCT user_id) FROM refresh_tokens WHERE created_at > now() - interval '7 days') AS users_active_7d,
+         (SELECT count(*) FROM households) AS households_total,
+         (SELECT count(*) FROM households h
+           WHERE NOT EXISTS (SELECT 1 FROM devices d WHERE d.household_id = h.id)) AS households_empty,
+         (SELECT count(*) FROM household_invites WHERE status = 'pending') AS invites_pending,
+         (SELECT count(*) FROM devices WHERE created_at > now() - interval '7 days') AS devices_new_7d,
+         (SELECT count(*) FROM device_switches) AS switches_total,
+         (SELECT count(*) FROM cached_channel_state c
+            JOIN devices d ON d.device_id = c.device_id AND d.household_id IS NOT NULL
+           WHERE c.state = 'ON') AS switches_on,
+         (SELECT count(*) FROM device_switches WHERE locked_at IS NOT NULL) AS switches_locked,
+         (SELECT count(*) FROM device_switches
+           WHERE max_on_s IS NOT NULL OR min_off_s IS NOT NULL) AS switches_safety,
+         (SELECT count(*) FROM device_switches WHERE watts IS NOT NULL) AS switches_metered,
+         (SELECT count(*) FROM device_schedules) AS schedules_total,
+         (SELECT count(*) FROM device_schedules WHERE enabled) AS schedules_enabled,
+         (SELECT count(*) FROM automations) AS automations_total,
+         (SELECT count(*) FROM automations WHERE enabled) AS automations_enabled,
+         (SELECT count(*) FROM groups) AS groups_total,
+         (SELECT count(*) FROM scenes) AS scenes_total,
+         (SELECT count(*) FROM activity_log
+           WHERE source = 'safety' AND created_at > now() - interval '24 hours') AS safety_24h,
+         (SELECT count(*) FROM activity_log WHERE created_at > now() - interval '7 days') AS activity_7d,
+         (SELECT count(*) FROM admin_audit_log WHERE created_at > now() - interval '7 days') AS audit_7d,
+         pg_database_size(current_database()) AS db_bytes`,
+    )),
+    safe('daily', pool.query(
+      `SELECT to_char(d, 'YYYY-MM-DD') AS day,
+              (SELECT count(*) FROM activity_log a
+                WHERE a.created_at >= d AND a.created_at < d + interval '1 day') AS activity,
+              (SELECT count(*) FROM users u
+                WHERE u.created_at >= d AND u.created_at < d + interval '1 day') AS signups
+         FROM generate_series(date_trunc('day', now()) - interval '13 days',
+                              date_trunc('day', now()), interval '1 day') AS d
+        ORDER BY d`,
+    )),
+    safe('hourly', pool.query(
+      `SELECT to_char(h, 'HH24') AS hour,
+              (SELECT count(*) FROM activity_log a
+                WHERE a.created_at >= h AND a.created_at < h + interval '1 hour') AS n
+         FROM generate_series(date_trunc('hour', now()) - interval '23 hours',
+                              date_trunc('hour', now()), interval '1 hour') AS h
+        ORDER BY h`,
+    )),
+    safe('topDevices', pool.query(
+      `SELECT a.device_id, d.friendly_name, count(*) AS n
+         FROM activity_log a LEFT JOIN devices d ON d.device_id = a.device_id
+        WHERE a.created_at > now() - interval '7 days'
+        GROUP BY a.device_id, d.friendly_name
+        ORDER BY n DESC LIMIT 5`,
+    )),
+    safe('claimedDevices', pool.query(
+      `SELECT d.device_id, d.friendly_name, d.last_seen_at, d.last_connected_at, d.diagnostics,
+              h.name AS household_name
+         FROM devices d LEFT JOIN households h ON h.id = d.household_id
+        WHERE d.household_id IS NOT NULL
+        ORDER BY d.last_seen_at DESC NULLS LAST
+        LIMIT 500`,
+    )),
+    safe('firmware', pool.query(
+      `SELECT COALESCE(diagnostics->>'fw', 'unknown') AS fw, count(*) AS n
+         FROM devices GROUP BY 1 ORDER BY n DESC LIMIT 8`,
+    )),
+    safe('recentUsers', pool.query(
+      `SELECT id, email, created_at, is_admin FROM users ORDER BY created_at DESC LIMIT 5`,
+    )),
+  ]);
+  const dbMs = Number(process.hrtime.bigint() - dbStart) / 1e6;
+  const n = (v) => Number(v ?? 0);
+  const e = extra.rows[0] ?? {};
+
+  const offline = [];
+  const weakSignal = [];
+  for (const d of claimedDevices.rows) {
+    const summary = {
+      deviceId: d.device_id,
+      name: d.friendly_name ?? null,
+      household: d.household_name ?? null,
+      lastSeenAt: d.last_seen_at ?? null,
+      rssi: typeof d.diagnostics?.rssi === 'number' ? d.diagnostics.rssi : null,
+    };
+    if (!isDeviceOnline(d.device_id)) offline.push(summary);
+    else if (summary.rssi != null && summary.rssi <= -80) weakSignal.push(summary);
+  }
+
+  const mem = process.memoryUsage();
+  return {
+    growth: {
+      usersNew7d: n(e.users_new_7d),
+      usersNew30d: n(e.users_new_30d),
+      usersActive24h: n(e.users_active_24h),
+      usersActive7d: n(e.users_active_7d),
+      devicesNew7d: n(e.devices_new_7d),
+    },
+    households: {
+      total: n(e.households_total),
+      withoutDevices: n(e.households_empty),
+      pendingInvites: n(e.invites_pending),
+    },
+    switches: {
+      total: n(e.switches_total),
+      on: n(e.switches_on),
+      locked: n(e.switches_locked),
+      withSafetyRules: n(e.switches_safety),
+      metered: n(e.switches_metered),
+    },
+    automation: {
+      schedules: n(e.schedules_total),
+      schedulesEnabled: n(e.schedules_enabled),
+      automations: n(e.automations_total),
+      automationsEnabled: n(e.automations_enabled),
+      groups: n(e.groups_total),
+      scenes: n(e.scenes_total),
+      safetyAutoOff24h: n(e.safety_24h),
+    },
+    trends: {
+      activity7d: n(e.activity_7d),
+      daily: daily.rows.map((r) => ({ day: r.day, activity: n(r.activity), signups: n(r.signups) })),
+      hourly24h: hourly.rows.map((r) => ({ hour: r.hour, count: n(r.n) })),
+      topDevices7d: topDevices.rows.map((r) => ({
+        deviceId: r.device_id,
+        name: r.friendly_name ?? null,
+        count: n(r.n),
+      })),
+    },
+    attention: {
+      offlineClaimed: offline.length,
+      offlineDevices: offline.slice(0, 8),
+      weakSignal: weakSignal.slice(0, 8),
+      firmware: firmware.rows.map((r) => ({ version: r.fw, count: n(r.n) })),
+    },
+    recentUsers: recentUsers.rows.map((r) => ({
+      id: Number(r.id),
+      email: r.email,
+      createdAt: r.created_at,
+      isAdmin: r.is_admin === true,
+    })),
+    system: {
+      version: BACKEND_VERSION,
+      node: process.version,
+      uptimeS: Math.round(process.uptime()),
+      memoryRssBytes: mem.rss,
+      heapUsedBytes: mem.heapUsed,
+      dbBytes: n(e.db_bytes),
+      dbQueryMs: Math.round(dbMs),
+      clients: getClientSocketStats(),
+      serverTime: new Date().toISOString(),
+    },
+  };
+}
+
 adminRouter.get('/stats', async (req, res) => {
-  const [{ rows: counts }, { rows: bySource }] = await Promise.all([
+  const [{ rows: counts }, { rows: bySource }, details] = await Promise.all([
     pool.query(
       `SELECT
          (SELECT count(*) FROM users) AS users_total,
@@ -125,6 +306,7 @@ adminRouter.get('/stats', async (req, res) => {
        WHERE created_at > now() - interval '24 hours'
        GROUP BY source ORDER BY n DESC`,
     ),
+    loadStatsDetails(),
   ]);
   const c = counts[0] ?? {};
   const n = (v) => Number(v ?? 0);
@@ -144,6 +326,7 @@ adminRouter.get('/stats', async (req, res) => {
     },
     apiKeys: { active: n(c.api_keys_active) },
     hooks: { active: n(c.hooks_active) },
+    ...details,
   });
 });
 

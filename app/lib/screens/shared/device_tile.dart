@@ -13,6 +13,7 @@ import 'device_visualization.dart';
 import 'edit_switch_dialog.dart';
 import 'friendly_error.dart';
 import 'lock_badge.dart';
+import 'press_scale.dart';
 
 /// Big, square, tap-to-toggle tile — the primary at-a-glance control surface
 /// on the Home dashboard (Google Home / Nest-style device grid). Whole tile
@@ -80,160 +81,185 @@ class DeviceTile extends ConsumerWidget {
     // Superellipse ("squircle") corners — smoother than a plain circular
     // radius. The decoration sits outside the clip so the ON glow isn't cut.
     const radius = BorderRadius.all(Radius.circular(32));
-    return AnimatedContainer(
-      duration: Motion.medium,
-      curve: Curves.easeOut,
-      decoration: ShapeDecoration(
-        // ON reads at a glance: the whole card takes the accent, not just
-        // the drawn switch plate.
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isOn
-              ? [
-                  colorScheme.primaryContainer,
-                  Color.alphaBlend(
-                    colorScheme.primary.withValues(alpha: 0.18),
+    return PressScale(
+      child: AnimatedContainer(
+        duration: Motion.medium,
+        curve: Curves.easeOut,
+        decoration: ShapeDecoration(
+          // ON reads at a glance: the whole card takes the accent, not just
+          // the drawn switch plate.
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isOn
+                ? [
                     colorScheme.primaryContainer,
-                  ),
-                ]
-              : [
-                  colorScheme.surfaceContainerLow,
-                  colorScheme.surfaceContainerLow,
-                ],
+                    Color.alphaBlend(
+                      colorScheme.primary.withValues(alpha: 0.18),
+                      colorScheme.primaryContainer,
+                    ),
+                  ]
+                : [
+                    colorScheme.surfaceContainerLow,
+                    colorScheme.surfaceContainerLow,
+                  ],
+          ),
+          shape: RoundedSuperellipseBorder(
+            borderRadius: radius,
+            side: BorderSide(
+              color: isOn
+                  ? colorScheme.primary.withValues(alpha: 0.45)
+                  : colorScheme.outlineVariant.withValues(alpha: 0.45),
+              width: isOn ? 1.5 : 1,
+            ),
+          ),
+          shadows: [
+            BoxShadow(
+              color: isOn
+                  ? colorScheme.primary.withValues(alpha: 0.28)
+                  : Colors.transparent,
+              blurRadius: 20,
+              offset: const Offset(0, 6),
+            ),
+          ],
         ),
-        shape: RoundedSuperellipseBorder(
+        child: ClipRSuperellipse(
           borderRadius: radius,
-          side: BorderSide(
-            color: isOn
-                ? colorScheme.primary.withValues(alpha: 0.45)
-                : colorScheme.outlineVariant.withValues(alpha: 0.45),
-            width: isOn ? 1.5 : 1,
-          ),
-        ),
-        shadows: [
-          BoxShadow(
-            color: isOn
-                ? colorScheme.primary.withValues(alpha: 0.28)
-                : Colors.transparent,
-            blurRadius: 20,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: ClipRSuperellipse(
-        borderRadius: radius,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            customBorder: const RoundedSuperellipseBorder(borderRadius: radius),
-            onTap: isOffline ? null : () => _toggle(context, ref, !isOn),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: Spacing.md,
-                vertical: Spacing.sm,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              customBorder: const RoundedSuperellipseBorder(
+                borderRadius: radius,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      isOffline
-                          ? const _OfflineBadge()
-                          : _StateDot(
-                              state: visualState,
-                              color: foregroundColor,
-                            ),
-                      if (switchConfig.locked) ...[
-                        const SizedBox(width: Spacing.xs),
-                        const SwitchLockBadge(),
-                      ],
-                      const Spacer(),
-                      // PopupMenuButton's default IconButton enforces a 48x48
-                      // min tap target regardless of the icon's own size —
-                      // shrinkWrap removes that so this header row doesn't
-                      // claim far more vertical space than its 20px icon
-                      // actually needs, which was overflowing this tile's
-                      // fixed grid-cell height by ~21px.
-                      Theme(
-                        data: Theme.of(context).copyWith(
-                          materialTapTargetSize:
-                              MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: PopupMenuButton<String>(
-                          padding: const EdgeInsets.all(4),
-                          icon: Icon(
-                            Icons.more_horiz_rounded,
-                            size: 20,
-                            color: foregroundColor.withValues(alpha: 0.7),
-                          ),
-                          onSelected: (value) {
-                            if (value == 'details') {
-                              Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  builder: (_) =>
-                                      DeviceDetailScreen(device: device),
+              onTap: isOffline ? null : () => _toggle(context, ref, !isOn),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Spacing.md,
+                  vertical: Spacing.sm,
+                ),
+                child: Column(
+                  children: [
+                    SizedBox(
+                      height: 24,
+                      child: Row(
+                        children: [
+                          isOffline
+                              ? const _OfflineBadge()
+                              : _StateDot(
+                                  state: visualState,
+                                  color: foregroundColor,
                                 ),
-                              );
-                            } else if (value == 'edit') {
-                              _edit(context, ref);
-                            }
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(
-                              value: 'details',
-                              child: Text('Open device'),
-                            ),
-                            PopupMenuItem(
-                              value: 'edit',
-                              child: Text('Switch settings'),
-                            ),
+                          if (switchConfig.locked) ...[
+                            const SizedBox(width: Spacing.xs),
+                            const SwitchLockBadge(),
                           ],
+                          const Spacer(),
+                          // PopupMenuButton's default IconButton enforces a 48x48
+                          // min tap target regardless of the icon's own size —
+                          // shrinkWrap removes that so this header row doesn't
+                          // claim far more vertical space than its 20px icon
+                          // actually needs, which was overflowing this tile's
+                          // fixed grid-cell height by ~21px.
+                          Theme(
+                            data: Theme.of(context).copyWith(
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: PopupMenuButton<String>(
+                              padding: EdgeInsets.zero,
+                              icon: Icon(
+                                Icons.more_horiz_rounded,
+                                size: 20,
+                                color: foregroundColor.withValues(alpha: 0.7),
+                              ),
+                              onSelected: (value) {
+                                if (value == 'details') {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) =>
+                                          DeviceDetailScreen(device: device),
+                                    ),
+                                  );
+                                } else if (value == 'edit') {
+                                  _edit(context, ref);
+                                }
+                              },
+                              itemBuilder: (_) => const [
+                                PopupMenuItem(
+                                  value: 'details',
+                                  child: Text('Open device'),
+                                ),
+                                PopupMenuItem(
+                                  value: 'edit',
+                                  child: Text('Switch settings'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: DeviceVisualization(
+                        kind: _kindFor(switchConfig.name),
+                        state: visualState,
+                        height: double.infinity,
+                        onTap: isOffline
+                            ? null
+                            : () => _toggle(context, ref, !isOn),
+                      ),
+                    ),
+                    AnimatedDefaultTextStyle(
+                      duration: Motion.medium,
+                      style: Theme.of(context).textTheme.titleMedium!.copyWith(
+                        color: foregroundColor,
+                        fontWeight: isOn ? FontWeight.w800 : FontWeight.w600,
+                      ),
+                      child: Text(
+                        switchConfig.name,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    AnimatedDefaultTextStyle(
+                      duration: Motion.medium,
+                      style: Theme.of(context).textTheme.bodySmall!.copyWith(
+                        color: isOn
+                            ? colorScheme.primary
+                            : foregroundColor.withValues(alpha: 0.8),
+                        fontWeight: isOn ? FontWeight.w700 : FontWeight.w400,
+                      ),
+                      // Old label slides up and out as the new one slides in.
+                      child: AnimatedSwitcher(
+                        duration: Motion.fast,
+                        switchInCurve: Motion.enter,
+                        switchOutCurve: Curves.easeIn,
+                        transitionBuilder: (child, animation) => FadeTransition(
+                          opacity: animation,
+                          child: SlideTransition(
+                            position: Tween(
+                              begin: const Offset(0, 0.4),
+                              end: Offset.zero,
+                            ).animate(animation),
+                            child: child,
+                          ),
+                        ),
+                        child: Text(
+                          isOffline
+                              ? 'Offline'
+                              : isLoading
+                              ? 'Connecting'
+                              : isOn
+                              ? 'On'
+                              : 'Off',
+                          key: ValueKey(visualState),
                         ),
                       ),
-                    ],
-                  ),
-                  DeviceVisualization(
-                    kind: _kindFor(switchConfig.name),
-                    state: visualState,
-                    height: 112,
-                    onTap: isOffline
-                        ? null
-                        : () => _toggle(context, ref, !isOn),
-                  ),
-                  AnimatedDefaultTextStyle(
-                    duration: Motion.medium,
-                    style: Theme.of(context).textTheme.titleMedium!.copyWith(
-                      color: foregroundColor,
-                      fontWeight: isOn ? FontWeight.w800 : FontWeight.w600,
                     ),
-                    child: Text(
-                      switchConfig.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  AnimatedDefaultTextStyle(
-                    duration: Motion.medium,
-                    style: Theme.of(context).textTheme.bodySmall!.copyWith(
-                      color: isOn
-                          ? colorScheme.primary
-                          : foregroundColor.withValues(alpha: 0.8),
-                      fontWeight: isOn ? FontWeight.w700 : FontWeight.w400,
-                    ),
-                    child: Text(
-                      isOffline
-                          ? 'Offline'
-                          : isLoading
-                          ? 'Connecting'
-                          : isOn
-                          ? 'On'
-                          : 'Off',
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

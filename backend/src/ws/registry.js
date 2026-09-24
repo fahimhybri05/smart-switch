@@ -65,6 +65,13 @@ export function disconnectDevice(deviceId, code = 4000, reason = 'closed by serv
   return true;
 }
 
+/** Live app/dashboard connections — admin overview only. */
+export function getClientSocketStats() {
+  let sockets = 0;
+  for (const set of clientSocketsByUser.values()) sockets += set.size;
+  return { users: clientSocketsByUser.size, sockets };
+}
+
 export function registerClient(userId, ws) {
   if (!clientSocketsByUser.has(userId)) {
     clientSocketsByUser.set(userId, new Set());

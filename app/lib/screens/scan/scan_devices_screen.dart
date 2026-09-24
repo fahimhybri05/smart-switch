@@ -51,7 +51,9 @@ class _ScanDevicesScreenState extends ConsumerState<ScanDevicesScreen> {
       _scanning = true;
     });
 
-    final known = {for (final d in ref.read(knownDevicesProvider)) d.deviceId: d};
+    final known = {
+      for (final d in ref.read(knownDevicesProvider)) d.deviceId: d,
+    };
 
     final discovery = ref.read(discoveryServiceProvider);
     _sub?.cancel();
@@ -108,9 +110,9 @@ class _ScanDevicesScreenState extends ConsumerState<ScanDevicesScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _addingIds.remove(device.deviceId));
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(friendlyErrorMessage(e, 'Add'))),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(friendlyErrorMessage(e, 'Add'))));
       }
     }
   }
@@ -123,9 +125,7 @@ class _ScanDevicesScreenState extends ConsumerState<ScanDevicesScreen> {
         actions: [
           IconButton(
             icon: Icon(
-              _scanning
-                  ? Icons.stop_circle_outlined
-                  : Icons.refresh_rounded,
+              _scanning ? Icons.stop_circle_outlined : Icons.refresh_rounded,
             ),
             tooltip: _scanning ? 'Stop scanning' : 'Scan again',
             onPressed: _scanning ? _stopScan : _startScan,
@@ -173,16 +173,16 @@ class _ScanDevicesScreenState extends ConsumerState<ScanDevicesScreen> {
                             added: _addedIds.contains(device.deviceId),
                             onAdd: () => _addDevice(device),
                           )
-                          .animate(delay: Motion.fast * index)
+                          .animate(delay: Motion.stagger(index))
                           .fadeIn(
                             duration: Motion.medium,
-                            curve: Motion.standard,
+                            curve: Motion.enter,
                           )
                           .slideX(
                             begin: 0.1,
                             end: 0,
                             duration: Motion.medium,
-                            curve: Motion.standard,
+                            curve: Motion.enter,
                           );
                     },
                   ),

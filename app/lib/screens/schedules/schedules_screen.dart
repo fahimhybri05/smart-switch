@@ -627,7 +627,8 @@ class _ScheduleEditorSheetState extends ConsumerState<_ScheduleEditorSheet> {
                 initialValue: _solarOffsetMin.toString(),
                 decoration: const InputDecoration(
                   labelText: 'Offset (minutes)',
-                  helperText: 'Negative = before, positive = after, e.g. '
+                  helperText:
+                      'Negative = before, positive = after, e.g. '
                       '-30 for "30 min before sunset"',
                   helperMaxLines: 2,
                 ),

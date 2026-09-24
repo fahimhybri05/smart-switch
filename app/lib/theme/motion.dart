@@ -9,4 +9,12 @@ abstract final class Motion {
   static const slow = Duration(milliseconds: 450);
 
   static const standard = Curves.easeInOutCubic;
+
+  /// Things arriving on screen: quick start, soft landing.
+  static const enter = Curves.easeOutCubic;
+
+  /// Delay for the [index]th item of a staggered list entrance. Capped so a
+  /// long list never makes the last visible rows wait.
+  static Duration stagger(int index) =>
+      Duration(milliseconds: 40 * (index < 8 ? index : 8));
 }

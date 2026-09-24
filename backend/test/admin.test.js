@@ -145,6 +145,13 @@ test('GET /admin/stats returns the documented shape', async (t) => {
   assert.deepEqual(body.activity, { last24h: 40, bySource24h: { app: 30, widget: 10 } });
   assert.deepEqual(body.apiKeys, { active: 3 });
   assert.deepEqual(body.hooks, { active: 4 });
+  // Detail sections are always present, zero-filled when their queries find nothing.
+  for (const key of ['growth', 'households', 'switches', 'automation', 'trends', 'attention', 'system']) {
+    assert.ok(body[key], `missing ${key}`);
+  }
+  assert.ok(Array.isArray(body.trends.daily));
+  assert.ok(Array.isArray(body.recentUsers));
+  assert.equal(typeof body.system.uptimeS, 'number');
 });
 
 test('GET /admin/users escapes ILIKE wildcards and never selects password hashes', async (t) => {

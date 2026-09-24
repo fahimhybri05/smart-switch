@@ -13,8 +13,11 @@ import '../../theme/app_theme.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
 import '../shared/device_sync_gate.dart';
+import '../../config/features.dart';
 import '../scenes/scene_runner.dart';
+import 'time_weather_chip.dart';
 import '../shared/device_tile.dart';
+import '../shared/press_scale.dart';
 import '../shared/skeleton_loader.dart';
 
 /// The app's real landing screen — an at-a-glance dashboard (Google Home /
@@ -26,13 +29,6 @@ class HomeDashboardScreen extends ConsumerWidget {
   /// Bottom-nav tab index to jump to (1 = Zones) when a zone shortcut is tapped.
   final void Function(int tabIndex) onNavigateToTab;
 
-  String get _greeting {
-    final hour = DateTime.now().hour;
-    if (hour < 12) return 'Good morning';
-    if (hour < 17) return 'Good afternoon';
-    return 'Good evening';
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final devices = ref.watch(knownDevicesProvider);
@@ -41,20 +37,10 @@ class HomeDashboardScreen extends ConsumerWidget {
     if (deviceGate != null) {
       return Scaffold(
         appBar: AppBar(
-          title: Text(_greeting),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.wifi_find_rounded),
-              tooltip: 'Scan for devices',
-              onPressed: () =>
-                  Navigator.pushNamed(context, AppRoutes.scanDevices),
-            ),
-            IconButton(
-              icon: const Icon(Icons.settings_outlined),
-              tooltip: 'Settings',
-              onPressed: () => Navigator.pushNamed(context, AppRoutes.settings),
-            ),
-          ],
+          toolbarHeight: _headerHeight,
+          titleSpacing: Spacing.md,
+          title: const _HeaderTitle(),
+          actions: const [_HeaderClock()],
         ),
         body: Column(
           children: [
@@ -107,13 +93,19 @@ class HomeDashboardScreen extends ConsumerWidget {
         final tileIndex = tiles.length;
         tiles.add(
           DeviceTile(device: device, switchConfig: sw)
-              .animate(delay: Motion.fast * tileIndex)
-              .fadeIn(duration: Motion.medium, curve: Motion.standard)
+              .animate(delay: Motion.stagger(tileIndex))
+              .fadeIn(duration: Motion.medium, curve: Motion.enter)
               .scaleXY(
-                begin: 0.9,
+                begin: 0.94,
                 end: 1,
                 duration: Motion.medium,
-                curve: Motion.standard,
+                curve: Motion.enter,
+              )
+              .slideY(
+                begin: 0.06,
+                end: 0,
+                duration: Motion.medium,
+                curve: Motion.enter,
               ),
         );
       }
@@ -131,36 +123,12 @@ class HomeDashboardScreen extends ConsumerWidget {
         onRefresh: () => refreshAllDevices(ref, devices),
         child: CustomScrollView(
           slivers: [
-            SliverAppBar.large(
-              title: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'My home',
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: colorScheme.primary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  Text(_greeting),
-                ],
-              ),
-              expandedHeight: 120,
+            SliverAppBar(
               pinned: true,
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.wifi_find_rounded),
-                  tooltip: 'Scan for devices',
-                  onPressed: () =>
-                      Navigator.pushNamed(context, AppRoutes.scanDevices),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.settings_outlined),
-                  tooltip: 'Settings',
-                  onPressed: () =>
-                      Navigator.pushNamed(context, AppRoutes.settings),
-                ),
-              ],
+              toolbarHeight: _headerHeight,
+              titleSpacing: Spacing.md,
+              title: const _HeaderTitle(),
+              actions: const [_HeaderClock()],
             ),
             const SliverToBoxAdapter(child: _InviteBanner()),
             SliverPadding(
@@ -190,7 +158,8 @@ class HomeDashboardScreen extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     // Scenes are backend-only — hidden when signed out.
-                    if (ref.watch(authProvider) != null) const _ScenesRow(),
+                    if (kShowScenes && ref.watch(authProvider) != null)
+                      const _ScenesRow(),
                     if (zones.isNotEmpty) ...[
                       const SizedBox(height: Spacing.lg),
                       const _SectionLabel('Rooms'),
@@ -274,23 +243,10 @@ class HomeDashboardScreen extends ConsumerWidget {
                       ),
                     ),
             ),
-            const SliverPadding(padding: EdgeInsets.only(bottom: 96)),
+            const SliverPadding(padding: EdgeInsets.only(bottom: 24)),
           ],
         ),
       ),
-      floatingActionButton:
-          FloatingActionButton.extended(
-            heroTag:
-                null, // avoid Hero-tag collision with other tabs' FABs — see home_shell.dart's IndexedStack
-            onPressed: () => Navigator.pushNamed(context, AppRoutes.addDevice),
-            icon: const Icon(Icons.add),
-            label: const Text('Add device'),
-          ).animate().scaleXY(
-            begin: 0,
-            end: 1,
-            duration: Motion.medium,
-            curve: Curves.easeOutBack,
-          ),
     );
   }
 
@@ -463,8 +419,7 @@ class _ScenesRowState extends ConsumerState<_ScenesRow> {
                     icon: Icons.add_rounded,
                     label: 'New scene',
                     busy: false,
-                    onTap: () =>
-                        Navigator.pushNamed(context, AppRoutes.scenes),
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.scenes),
                   )
                 : _SceneCard(
                     icon: sceneIconData(scenes[i].icon),
@@ -815,62 +770,119 @@ class _RoomCard extends StatelessWidget {
     final active = onCount > 0;
     return SizedBox(
       width: 140,
-      child: Material(
-        color: active
-            ? colorScheme.primaryContainer
-            : colorScheme.surfaceContainerHigh,
-        shape: const RoundedSuperellipseBorder(
-          borderRadius: BorderRadius.all(Radius.circular(22)),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(Spacing.md),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Icon(
-                  active
-                      ? Icons.meeting_room_rounded
-                      : Icons.meeting_room_outlined,
-                  size: 22,
-                  color: active
-                      ? colorScheme.onPrimaryContainer
-                      : colorScheme.onSurfaceVariant,
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: active
-                            ? colorScheme.onPrimaryContainer
-                            : colorScheme.onSurface,
+      child: PressScale(
+        child: Material(
+          color: active
+              ? colorScheme.primaryContainer
+              : colorScheme.surfaceContainerHigh,
+          shape: const RoundedSuperellipseBorder(
+            borderRadius: BorderRadius.all(Radius.circular(22)),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.all(Spacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Icon(
+                    active
+                        ? Icons.meeting_room_rounded
+                        : Icons.meeting_room_outlined,
+                    size: 22,
+                    color: active
+                        ? colorScheme.onPrimaryContainer
+                        : colorScheme.onSurfaceVariant,
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: active
+                              ? colorScheme.onPrimaryContainer
+                              : colorScheme.onSurface,
+                        ),
                       ),
-                    ),
-                    Text(
-                      onCount == 0 ? 'All off' : '$onCount of $total on',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: active
-                            ? colorScheme.onPrimaryContainer.withValues(
-                                alpha: 0.8,
-                              )
-                            : colorScheme.onSurfaceVariant,
+                      Text(
+                        onCount == 0 ? 'All off' : '$onCount of $total on',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: active
+                              ? colorScheme.onPrimaryContainer.withValues(
+                                  alpha: 0.8,
+                                )
+                              : colorScheme.onSurfaceVariant,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+String _greeting() {
+  final hour = DateTime.now().hour;
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+/// Tall enough for the three-line clock/weather stack.
+const double _headerHeight = 76;
+
+/// Brand label over the greeting — left edge lines up with the grid gutter.
+class _HeaderTitle extends StatelessWidget {
+  const _HeaderTitle();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Smart Control',
+          style: theme.textTheme.labelLarge?.copyWith(
+            color: theme.colorScheme.primary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        Text(
+          _greeting(),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Clock + weather, vertically centred against the title, right edge on the
+/// grid gutter.
+class _HeaderClock extends StatelessWidget {
+  const _HeaderClock();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.only(right: Spacing.md),
+      child: Center(child: TimeWeatherChip()),
     );
   }
 }

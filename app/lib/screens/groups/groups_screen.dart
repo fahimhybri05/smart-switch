@@ -14,6 +14,7 @@ import '../shared/device_sync_gate.dart';
 import '../shared/empty_state_view.dart';
 import '../shared/device_visualization.dart';
 import '../shared/lock_badge.dart';
+import '../shared/press_scale.dart';
 
 class GroupsScreen extends ConsumerWidget {
   const GroupsScreen({super.key});
@@ -248,16 +249,19 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
       }
       // Watched (not just read) so the lock badge updates after a
       // switch's settings are saved elsewhere.
-      final memberConfig = ref.watch(deviceConfigProvider(device)).asData?.value;
+      final memberConfig = ref
+          .watch(deviceConfigProvider(device))
+          .asData
+          ?.value;
       if (memberConfig != null &&
           memberConfig.switches.any(
             (sw) => sw.channelIdx == member.channelIdx && sw.locked,
           )) {
         lockedCount++;
       }
-      final override = ref.watch(channelOverrideProvider)[
-        (device.deviceId, member.channelIdx)
-      ];
+      final override = ref.watch(
+        channelOverrideProvider,
+      )[(device.deviceId, member.channelIdx)];
       if (override != null) {
         if (override == ChannelPowerState.on) anyOn = true;
         allOn = override == ChannelPowerState.on && allOn;
@@ -269,15 +273,14 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
       // channelsAsync.hasError almost never fires (channelStatesProvider
       // swallows poll failures into a successful empty list so its retry
       // loop can keep going); deviceUnreachableProvider is the real signal.
-      if (channelsAsync.hasError || ref.watch(deviceUnreachableProvider(device))) {
+      if (channelsAsync.hasError ||
+          ref.watch(deviceUnreachableProvider(device))) {
         anyOffline = true;
       }
       final state = channelsAsync.asData?.value.firstWhere(
         (item) => item.channelIdx == member.channelIdx,
-        orElse: () => const ChannelState(
-          channelIdx: -1,
-          state: ChannelPowerState.off,
-        ),
+        orElse: () =>
+            const ChannelState(channelIdx: -1, state: ChannelPowerState.off),
       );
       final isOn = state?.state == ChannelPowerState.on;
       anyOn = anyOn || isOn;
@@ -317,11 +320,12 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
           leading: SizedBox(
             width: 84,
             child: DeviceVisualization(
-              kind: DeviceVisualKind.fromName(group.name) ==
+              kind:
+                  DeviceVisualKind.fromName(group.name) ==
                       DeviceVisualKind.appliance
                   ? DeviceVisualKind.switchDevice
                   : DeviceVisualKind.fromName(group.name),
-              gangCount: group.members.length.clamp(1, 4),
+              gangCount: group.members.length.clamp(1, 6),
               height: 72,
               state: visualState,
               onTap: group.members.isEmpty
@@ -450,16 +454,15 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
           opacity: _removing ? 0 : 1,
           duration: Motion.medium,
           curve: Motion.standard,
-          child:
-              card
-                  .animate(delay: Motion.fast * index)
-                  .fadeIn(duration: Motion.medium, curve: Motion.standard)
-                  .slideY(
-                    begin: 0.08,
-                    end: 0,
-                    duration: Motion.medium,
-                    curve: Motion.standard,
-                  ),
+          child: PressScale(scale: 0.98, child: card)
+              .animate(delay: Motion.stagger(index))
+              .fadeIn(duration: Motion.medium, curve: Motion.enter)
+              .slideY(
+                begin: 0.08,
+                end: 0,
+                duration: Motion.medium,
+                curve: Motion.enter,
+              ),
         ),
       ),
     );
@@ -471,7 +474,11 @@ class _GroupTileState extends ConsumerState<_GroupTile> {
 /// the action's intent — primary accent for on, dim ink for off/edit, danger
 /// red for delete) reads as more deliberate.
 class _MenuRow extends StatelessWidget {
-  const _MenuRow({required this.icon, required this.label, required this.color});
+  const _MenuRow({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
 
   final IconData icon;
   final String label;

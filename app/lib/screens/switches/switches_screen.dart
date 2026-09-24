@@ -121,13 +121,13 @@ class _DeviceSwitchesSection extends ConsumerWidget {
             ),
           ],
         )
-        .animate(delay: Motion.fast * index)
-        .fadeIn(duration: Motion.medium, curve: Motion.standard)
+        .animate(delay: Motion.stagger(index))
+        .fadeIn(duration: Motion.medium, curve: Motion.enter)
         .slideY(
           begin: 0.08,
           end: 0,
           duration: Motion.medium,
-          curve: Motion.standard,
+          curve: Motion.enter,
         );
   }
 }

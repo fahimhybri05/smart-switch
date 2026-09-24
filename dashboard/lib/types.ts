@@ -427,12 +427,57 @@ export interface CreatedHook extends Hook {
 /* ---------------------------------- Admin -------------------------------- */
 
 /** GET /admin/stats */
+export interface AdminDeviceAttention {
+  deviceId: string;
+  name: string | null;
+  household: string | null;
+  lastSeenAt: string | null;
+  rssi: number | null;
+}
+
 export interface AdminStats {
   users: { total: number; admins: number; disabled: number };
   devices: { total: number; online: number; claimed: number; unclaimed: number };
   activity: { last24h: number; bySource24h: Record<string, number> };
   apiKeys: { active: number };
   hooks: { active: number };
+  // Detail sections — optional so an older backend still renders the basics.
+  growth?: { usersNew7d: number; usersNew30d: number; usersActive24h: number; usersActive7d: number; devicesNew7d: number };
+  households?: { total: number; withoutDevices: number; pendingInvites: number };
+  switches?: { total: number; on: number; locked: number; withSafetyRules: number; metered: number };
+  automation?: {
+    schedules: number;
+    schedulesEnabled: number;
+    automations: number;
+    automationsEnabled: number;
+    groups: number;
+    scenes: number;
+    safetyAutoOff24h: number;
+  };
+  trends?: {
+    activity7d: number;
+    daily: { day: string; activity: number; signups: number }[];
+    hourly24h: { hour: string; count: number }[];
+    topDevices7d: { deviceId: string; name: string | null; count: number }[];
+  };
+  attention?: {
+    offlineClaimed: number;
+    offlineDevices: AdminDeviceAttention[];
+    weakSignal: AdminDeviceAttention[];
+    firmware: { version: string; count: number }[];
+  };
+  recentUsers?: { id: number; email: string; createdAt: string; isAdmin: boolean }[];
+  system?: {
+    version: string | null;
+    node: string;
+    uptimeS: number;
+    memoryRssBytes: number;
+    heapUsedBytes: number;
+    dbBytes: number;
+    dbQueryMs: number;
+    clients: { users: number; sockets: number };
+    serverTime: string;
+  };
 }
 
 /** One row of GET /admin/users → { users, total }. */

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../config/features.dart';
 import '../../models/device/device_config.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
@@ -447,15 +448,17 @@ class SettingsScreen extends ConsumerWidget {
                   onTap: () =>
                       Navigator.of(context).pushNamed(AppRoutes.automations),
                 ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const _RowIconBox(Icons.auto_awesome_outlined),
-                  title: const Text('Scenes'),
-                  subtitle: const Text('Set several switches with one tap'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () =>
-                      Navigator.of(context).pushNamed(AppRoutes.scenes),
-                ),
+                if (kShowScenes) ...[
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const _RowIconBox(Icons.auto_awesome_outlined),
+                    title: const Text('Scenes'),
+                    subtitle: const Text('Set several switches with one tap'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () =>
+                        Navigator.of(context).pushNamed(AppRoutes.scenes),
+                  ),
+                ],
                 const Divider(height: 1),
                 ListTile(
                   leading: const _RowIconBox(Icons.insights_outlined),
@@ -470,6 +473,33 @@ class SettingsScreen extends ConsumerWidget {
           const _SectionHeader(
             icon: Icons.developer_board_outlined,
             label: 'Known devices',
+          ),
+          // Adding devices lives here once the home screen has devices (the
+          // home screen only offers "Add device" while it's still empty).
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const _RowIconBox(Icons.add_circle_outline),
+                  title: const Text('Add device'),
+                  subtitle: const Text('Set up a new Smart Control device'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      Navigator.of(context).pushNamed(AppRoutes.addDevice),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const _RowIconBox(Icons.wifi_find_rounded),
+                  title: const Text('Scan for devices'),
+                  subtitle: const Text(
+                    'Find devices already connected to this WiFi',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      Navigator.of(context).pushNamed(AppRoutes.scanDevices),
+                ),
+              ],
+            ),
           ),
           if (devices.isEmpty)
             const Padding(

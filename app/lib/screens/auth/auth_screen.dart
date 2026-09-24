@@ -65,7 +65,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     if (_isSignup) return;
     final creds = await CredentialStore.read();
     if (!mounted || creds == null) return;
-    if (_emailController.text.isNotEmpty || _passwordController.text.isNotEmpty) return;
+    if (_emailController.text.isNotEmpty ||
+        _passwordController.text.isNotEmpty) {
+      return;
+    }
     setState(() {
       _emailController.text = creds.email;
       _passwordController.text = creds.password;

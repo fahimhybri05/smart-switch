@@ -64,6 +64,14 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // These pages moved under /settings — keep old links and bookmarks working.
+  async redirects() {
+    return [
+      { source: '/profile', destination: '/settings/profile', permanent: false },
+      { source: '/household', destination: '/settings/household', permanent: false },
+      { source: '/integrations', destination: '/settings/integrations', permanent: false },
+    ];
+  },
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },

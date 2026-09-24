@@ -9,13 +9,12 @@ import {
   ChevronDown,
   Cpu,
   Gauge,
-  Home,
   KeyRound,
   LayoutGrid,
   LogOut,
   Menu,
-  PlugZap,
   ScrollText,
+  Settings,
   Sparkles,
   UserRound,
   Users,
@@ -42,21 +41,19 @@ import {
 import { authApi, errorMessage } from '@/lib/api';
 import { LiveProvider } from '@/lib/live';
 import { useMe } from '@/lib/queries';
+import { SHOW_SCENES } from '@/lib/features';
 import { cn } from '@/lib/utils';
 
 type NavItem = { href: string; label: string; icon: typeof LayoutGrid; exact?: boolean };
 
 const NAV: NavItem[] = [
   { href: '/', label: 'Overview', icon: LayoutGrid },
-  { href: '/scenes', label: 'Scenes', icon: Sparkles },
+  ...(SHOW_SCENES ? [{ href: '/scenes', label: 'Scenes', icon: Sparkles }] : []),
   { href: '/groups', label: 'Groups', icon: Boxes },
   { href: '/schedules', label: 'Schedules', icon: CalendarClock },
   { href: '/automations', label: 'Automations', icon: Zap },
   { href: '/usage', label: 'Usage', icon: BarChart3 },
-  { href: '/household', label: 'Household', icon: Home },
-  { href: '/integrations', label: 'API & Integrations', icon: PlugZap },
   { href: '/activity', label: 'Activity', icon: Activity },
-  { href: '/profile', label: 'Profile', icon: UserRound },
 ];
 
 /** Shown only to admins — the backend enforces is_admin on every /admin call regardless. */
@@ -106,20 +103,28 @@ function NavList({ items, onNavigate }: { items: NavItem[]; onNavigate?: () => v
   );
 }
 
+/** Pinned to the bottom of the sidebar, below the scrolling nav. */
+const SETTINGS_NAV: NavItem[] = [{ href: '/settings', label: 'Settings', icon: Settings }];
+
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const { me } = useMe();
   return (
-    <nav className="grid gap-1 overflow-y-auto">
-      <NavList items={NAV} onNavigate={onNavigate} />
-      {me?.isAdmin && (
-        <>
-          <div className="mt-5 px-3 pb-1 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-            Admin
-          </div>
-          <NavList items={ADMIN_NAV} onNavigate={onNavigate} />
-        </>
-      )}
-    </nav>
+    <>
+      <nav className="-mx-1 grid min-h-0 flex-1 content-start gap-1 overflow-y-auto px-1">
+        <NavList items={NAV} onNavigate={onNavigate} />
+        {me?.isAdmin && (
+          <>
+            <div className="mt-5 px-3 pb-1 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+              Admin
+            </div>
+            <NavList items={ADMIN_NAV} onNavigate={onNavigate} />
+          </>
+        )}
+      </nav>
+      <nav className="grid gap-1 border-t pt-4" aria-label="Settings">
+        <NavList items={SETTINGS_NAV} onNavigate={onNavigate} />
+      </nav>
+    </>
   );
 }
 
@@ -158,8 +163,13 @@ function UserMenu() {
         <DropdownMenuLabel className="truncate">{me?.email ?? 'Signed in'}</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
-          <Link href="/profile">
+          <Link href="/settings/profile">
             <UserRound /> Profile
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/settings">
+            <Settings /> Settings
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem onClick={logout} disabled={busy} className="text-destructive focus:text-destructive">
@@ -184,9 +194,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Brand />
           </Link>
           <NavLinks />
-          <div className="mt-auto px-2 text-xs text-muted-foreground">
-            Devices are added from the Smart Control mobile app.
-          </div>
         </aside>
 
         {/* Mobile drawer */}

@@ -87,8 +87,9 @@ class _UsageScreenState extends ConsumerState<UsageScreen> {
                 ),
               ],
               data: (report) {
-                final switches = [...report.switches]
-                  ..sort((a, b) => b.totalOnSeconds.compareTo(a.totalOnSeconds));
+                final switches = [
+                  ...report.switches,
+                ]..sort((a, b) => b.totalOnSeconds.compareTo(a.totalOnSeconds));
                 final maxSeconds = sharedUsageMax(switches);
                 return [
                   Card(

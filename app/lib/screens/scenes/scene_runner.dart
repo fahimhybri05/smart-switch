@@ -53,7 +53,8 @@ Future<void> runSceneWithFeedback(
       }
     }
     final failures = summary.failures;
-    final headline = '${scene.name}: ${summary.succeeded} of '
+    final headline =
+        '${scene.name}: ${summary.succeeded} of '
         '${summary.total} done';
     final lines = [
       headline,

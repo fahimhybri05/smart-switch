@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="widget_surface">#131417</color>
-    <color name="widget_tile_off">#1E2024</color>
-    <color name="widget_tile_on">#A8C7FA</color>
-    <color name="widget_circle_off">#2A2D32</color>
-    <color name="widget_circle_on">#26062E6F</color>
-    <color name="widget_text">#E3E3E6</color>
-    <color name="widget_text_muted">#9AA0A6</color>
-    <color name="widget_text_on">#062E6F</color>
-    <color name="widget_icon_off">#C4C7C5</color>
-    <color name="widget_icon_on">#062E6F</color>
+    <!-- Smart Control palette (matches the app theme and web dashboard):
+         navy base, brand green #3DDC97 for ON with navy text/icons. -->
+    <color name="widget_surface">#101827</color>
+    <color name="widget_tile_off">#182234</color>
+    <color name="widget_tile_on">#3DDC97</color>
+    <color name="widget_circle_off">#242F42</color>
+    <color name="widget_circle_on">#26101827</color>
+    <color name="widget_text">#F1F5F9</color>
+    <color name="widget_text_muted">#97A5BA</color>
+    <color name="widget_text_on">#101827</color>
+    <color name="widget_icon_off">#97A5BA</color>
+    <color name="widget_icon_on">#101827</color>
 </resources>

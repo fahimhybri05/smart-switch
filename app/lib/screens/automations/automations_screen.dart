@@ -61,7 +61,8 @@ class AutomationsScreen extends ConsumerWidget {
             ? const EmptyStateView(
                 icon: Icons.bolt_outlined,
                 title: 'No automations yet',
-                subtitle: 'Create a rule that runs on its own, even with the app closed.',
+                subtitle:
+                    'Create a rule that runs on its own, even with the app closed.',
               )
             : ListView(
                 padding: const EdgeInsets.all(Spacing.md),
@@ -203,16 +204,16 @@ class _AutomationTileState extends ConsumerState<_AutomationTile> {
                         width: 40,
                         height: 40,
                         decoration: BoxDecoration(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.primaryContainer,
+                          color: Theme.of(context).colorScheme.primaryContainer,
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Icon(
                           automation.trigger is ScheduleTrigger
                               ? Icons.schedule_outlined
                               : Icons.bolt_outlined,
-                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onPrimaryContainer,
                           size: 20,
                         ),
                       ),
@@ -287,13 +288,13 @@ class _AutomationTileState extends ConsumerState<_AutomationTile> {
                   ),
           ),
         )
-        .animate(delay: Motion.fast * widget.index)
-        .fadeIn(duration: Motion.medium, curve: Motion.standard)
+        .animate(delay: Motion.stagger(widget.index))
+        .fadeIn(duration: Motion.medium, curve: Motion.enter)
         .slideY(
           begin: 0.08,
           end: 0,
           duration: Motion.medium,
-          curve: Motion.standard,
+          curve: Motion.enter,
         );
   }
 }
@@ -520,7 +521,8 @@ class _AutomationEditorState extends ConsumerState<_AutomationEditor> {
                   ),
                 ],
                 selected: {_triggerState},
-                onSelectionChanged: (v) => setState(() => _triggerState = v.first),
+                onSelectionChanged: (v) =>
+                    setState(() => _triggerState = v.first),
               ),
             ],
             const SizedBox(height: Spacing.md),
@@ -534,8 +536,14 @@ class _AutomationEditorState extends ConsumerState<_AutomationEditor> {
             const SizedBox(height: Spacing.sm),
             SegmentedButton<ChannelPowerState>(
               segments: const [
-                ButtonSegment(value: ChannelPowerState.on, label: Text('Turn on')),
-                ButtonSegment(value: ChannelPowerState.off, label: Text('Turn off')),
+                ButtonSegment(
+                  value: ChannelPowerState.on,
+                  label: Text('Turn on'),
+                ),
+                ButtonSegment(
+                  value: ChannelPowerState.off,
+                  label: Text('Turn off'),
+                ),
               ],
               selected: {_actionState},
               onSelectionChanged: (v) => setState(() => _actionState = v.first),
@@ -612,7 +620,8 @@ class _TriggerDevicePicker extends ConsumerWidget {
                             ? null
                             : '$selectedDeviceId:$selectedChannelIdx',
                         // ignore: deprecated_member_use
-                        onChanged: (_) => onSelected(device.deviceId, sw.channelIdx),
+                        onChanged: (_) =>
+                            onSelected(device.deviceId, sw.channelIdx),
                       ),
                   ],
                 ),

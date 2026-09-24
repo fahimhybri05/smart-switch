@@ -106,12 +106,7 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
                       ],
                     )
                   : ListView(
-                      padding: const EdgeInsets.fromLTRB(
-                        0,
-                        Spacing.sm,
-                        0,
-                        96,
-                      ),
+                      padding: const EdgeInsets.fromLTRB(0, Spacing.sm, 0, 96),
                       children: [
                         for (var i = 0; i < scenes.length; i++)
                           _SceneCard(
@@ -122,16 +117,16 @@ class _ScenesScreenState extends ConsumerState<ScenesScreen> {
                                 onEdit: () => _openEditor(scenes[i]),
                                 onDelete: () => _confirmDelete(scenes[i]),
                               )
-                              .animate(delay: Motion.fast * i)
+                              .animate(delay: Motion.stagger(i))
                               .fadeIn(
                                 duration: Motion.medium,
-                                curve: Motion.standard,
+                                curve: Motion.enter,
                               )
                               .slideY(
                                 begin: 0.08,
                                 end: 0,
                                 duration: Motion.medium,
-                                curve: Motion.standard,
+                                curve: Motion.enter,
                               ),
                       ],
                     ),
@@ -398,10 +393,7 @@ class _SceneEditorSheetState extends ConsumerState<SceneEditorSheet> {
               ),
             ],
             const SizedBox(height: Spacing.md),
-            Text(
-              'Switches (${_actions.length})',
-              style: textTheme.labelLarge,
-            ),
+            Text('Switches (${_actions.length})', style: textTheme.labelLarge),
             if (otherDeviceActions > 0)
               Padding(
                 padding: const EdgeInsets.only(top: Spacing.xs),

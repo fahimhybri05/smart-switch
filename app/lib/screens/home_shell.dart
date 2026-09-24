@@ -4,6 +4,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'groups/groups_screen.dart';
 import 'home/home_dashboard_screen.dart';
 import 'schedules/schedules_screen.dart';
+import 'settings/settings_screen.dart';
 import 'switches/switches_screen.dart';
 import '../theme/motion.dart';
 import 'zones/zones_screen.dart';
@@ -32,6 +33,11 @@ const _navEntries = <_NavEntry>[
     selectedIcon: Icons.group_work,
     label: 'Groups',
   ),
+  (
+    icon: Icons.settings_outlined,
+    selectedIcon: Icons.settings,
+    label: 'Settings',
+  ),
 ];
 
 /// The M3 "expanded" breakpoint — above this a side [NavigationRail] reads
@@ -46,23 +52,42 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell>
+    with SingleTickerProviderStateMixin {
   int _index = 0;
-  double _tabOpacity = 1;
+
+  // Drives the tab-change "fade through": the incoming tab fades in while
+  // rising a few pixels and settling from a hair under full size.
+  late final AnimationController _tabController = AnimationController(
+    vsync: this,
+    duration: Motion.medium,
+    value: 1,
+  );
+  late final Animation<double> _tabCurve = CurvedAnimation(
+    parent: _tabController,
+    curve: Motion.enter,
+  );
+  late final Animation<Offset> _tabSlide = Tween(
+    begin: const Offset(0, 0.015),
+    end: Offset.zero,
+  ).animate(_tabCurve);
+  late final Animation<double> _tabScale = Tween(
+    begin: 0.985,
+    end: 1.0,
+  ).animate(_tabCurve);
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   void _goToTab(int i) {
     if (i == _index) {
       return;
     }
-    setState(() {
-      _index = i;
-      _tabOpacity = 0;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        setState(() => _tabOpacity = 1);
-      }
-    });
+    setState(() => _index = i);
+    _tabController.forward(from: 0);
   }
 
   Widget _selectedIcon(IconData icon) {
@@ -82,18 +107,23 @@ class _HomeShellState extends State<HomeShell> {
       const SwitchesScreen(),
       const SchedulesScreen(),
       const GroupsScreen(),
+      const SettingsScreen(),
     ];
 
     // IndexedStack (and its stable, keyless children) must never be rebuilt
     // from scratch — that's what keeps each tab's autoDispose polling
     // providers (e.g. channelStatesProvider) alive across tab switches. The
-    // fade is driven purely by AnimatedOpacity's implicit value change, not
-    // by any key change up the tree.
-    final body = AnimatedOpacity(
-      opacity: _tabOpacity,
-      duration: Motion.fast,
-      curve: Motion.standard,
-      child: IndexedStack(index: _index, children: tabs),
+    // transition is driven purely by the controller wrapping it, not by any
+    // key change up the tree.
+    final body = FadeTransition(
+      opacity: _tabCurve,
+      child: SlideTransition(
+        position: _tabSlide,
+        child: ScaleTransition(
+          scale: _tabScale,
+          child: IndexedStack(index: _index, children: tabs),
+        ),
+      ),
     );
 
     final isWide = MediaQuery.sizeOf(context).width >= _wideBreakpoint;
@@ -128,7 +158,7 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: _goToTab,
-        labelBehavior: MediaQuery.sizeOf(context).width < 380
+        labelBehavior: MediaQuery.sizeOf(context).width < 440
             ? NavigationDestinationLabelBehavior.onlyShowSelected
             : NavigationDestinationLabelBehavior.alwaysShow,
         destinations: [

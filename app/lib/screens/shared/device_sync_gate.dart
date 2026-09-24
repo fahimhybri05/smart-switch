@@ -41,7 +41,8 @@ Widget? buildDeviceEmptyOrLoadingState(
 
   if (syncStatus.hasError) {
     return ErrorView(
-      message: 'Could not load your devices. Check your connection and try again.',
+      message:
+          'Could not load your devices. Check your connection and try again.',
       onRetry: () => ref.read(deviceSyncStatusProvider.notifier).retry(),
     );
   }

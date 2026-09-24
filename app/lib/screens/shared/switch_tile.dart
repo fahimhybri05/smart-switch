@@ -62,7 +62,8 @@ class SwitchTile extends ConsumerWidget {
     // for the rare case the stream errors before that catch block runs.
     final isOffline =
         override == null &&
-        (channelsAsync.hasError || ref.watch(deviceUnreachableProvider(device)));
+        (channelsAsync.hasError ||
+            ref.watch(deviceUnreachableProvider(device)));
     // A command in flight shows its target state right away (no spinner).
     final visualState = isOffline
         ? DeviceVisualState.offline
@@ -79,9 +80,7 @@ class SwitchTile extends ConsumerWidget {
           kind: _kindFor(switchConfig.name),
           state: visualState,
           height: 58,
-          onTap: isOffline
-              ? null
-              : () => _toggle(context, ref, !isOn),
+          onTap: isOffline ? null : () => _toggle(context, ref, !isOn),
         ),
       ),
       title: Row(

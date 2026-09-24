@@ -115,45 +115,47 @@ class AppPanelColors extends ThemeExtension<AppPanelColors> {
     );
   }
 
+  // Smart Control palette — same tokens as the web dashboard
+  // (dashboard/app/globals.css): navy base, brand green #3DDC97.
   static const light = AppPanelColors(
-    stage: Color(0xFFEAEDF1),
-    accent: Color(0xFF1A73E8),
-    accentStrong: Color(0xFF0B57D0),
-    live: Color(0xFF1E8E3E),
-    liveGlow: Color(0x591E8E3E),
-    accentGlow: Color(0x4D1A73E8),
-    warn: Color(0xFFE37400),
-    off: Color(0xFFC4C7C5),
-    navInk: Color(0xFF5F6368),
+    stage: Color(0xFFF5F7FA),
+    accent: Color(0xFF3DDC97),
+    accentStrong: Color(0xFF1C9E6A),
+    live: Color(0xFF1C9E6A),
+    liveGlow: Color(0x593DDC97),
+    accentGlow: Color(0x4D3DDC97),
+    warn: Color(0xFFF59309),
+    off: Color(0xFFC3CCD8),
+    navInk: Color(0xFF5A687C),
     plateHi: Color(0xFFF6F8FA),
     plateLo: Color(0xFFDDE1E6),
     paddleHi: Color(0xFFFFFFFF),
     paddle: Color(0xFFF1F3F4),
     paddleLo: Color(0xFFDADCE0),
     screw: Color(0xFF9AA0A6),
-    shadow: Color(0x1F1B2733),
+    shadow: Color(0x1F101827),
     hi: Color(0x8CFFFFFF),
-    sh: Color(0x1417191C),
+    sh: Color(0x14101827),
   );
 
   static const dark = AppPanelColors(
-    stage: Color(0xFF131417),
-    accent: Color(0xFFA8C7FA),
-    accentStrong: Color(0xFFD3E3FD),
-    live: Color(0xFF81C995),
-    liveGlow: Color(0x6681C995),
-    accentGlow: Color(0x52A8C7FA),
-    warn: Color(0xFFFDD663),
-    off: Color(0xFF444746),
-    navInk: Color(0xFF9AA0A6),
-    plateHi: Color(0xFF3C4043),
-    plateLo: Color(0xFF26282B),
-    paddleHi: Color(0xFF5F6368),
-    paddle: Color(0xFF48494A),
-    paddleLo: Color(0xFF333537),
-    screw: Color(0xFF6B7075),
+    stage: Color(0xFF0C1320),
+    accent: Color(0xFF3DDC97),
+    accentStrong: Color(0xFF1C9E6A),
+    live: Color(0xFF3DDC97),
+    liveGlow: Color(0x663DDC97),
+    accentGlow: Color(0x523DDC97),
+    warn: Color(0xFFF6AA28),
+    off: Color(0xFF3A4A63),
+    navInk: Color(0xFF97A5BA),
+    plateHi: Color(0xFF2A2E35),
+    plateLo: Color(0xFF1C1F25),
+    paddleHi: Color(0xFF3E444F),
+    paddle: Color(0xFF343942),
+    paddleLo: Color(0xFF2A2F37),
+    screw: Color(0xFF6B7280),
     shadow: Color(0x66000000),
-    hi: Color(0x0DFFFFFF),
+    hi: Color(0x14FFFFFF),
     sh: Color(0x66000000),
   );
 }
@@ -163,39 +165,92 @@ extension AppPanelColorsContext on BuildContext {
   AppPanelColors get panelColors => Theme.of(this).extension<AppPanelColors>()!;
 }
 
-// Modern Material 3 identity — a Google-blue seed instead of the previous
-// copper/brass industrial theme, with tonal surfaces via ColorScheme.fromSeed
-// and a couple of semantic overrides (live/warn) the app relies on.
-const _lightSeed = Color(0xFF1A73E8);
-const _darkSeed = Color(0xFFA8C7FA);
+// Smart Control identity, matching the web dashboard: brand green on a navy
+// base. Surfaces are set explicitly (not seed-generated tones) so the app
+// and dashboard use the same colors.
+const _brand = Color(0xFF3DDC97);
+const _navy = Color(0xFF101827);
 
 ThemeData _buildTheme(Brightness brightness) {
   final isDark = brightness == Brightness.dark;
   final panelTokens = isDark ? AppPanelColors.dark : AppPanelColors.light;
 
   final baseScheme = ColorScheme.fromSeed(
-    seedColor: isDark ? _darkSeed : _lightSeed,
+    seedColor: _brand,
     brightness: brightness,
-    contrastLevel: 0.05,
   );
-  final colorScheme = baseScheme.copyWith(
-    tertiary: panelTokens.live,
-    onTertiary: isDark ? const Color(0xFF0A3818) : Colors.white,
-    tertiaryContainer: Color.lerp(panelTokens.live, baseScheme.surface, 0.8)!,
-    onTertiaryContainer: Color.lerp(
-      panelTokens.live,
-      baseScheme.onSurface,
-      0.2,
-    )!,
-    secondary: panelTokens.warn,
-    onSecondary: isDark ? const Color(0xFF3D2900) : Colors.white,
-    secondaryContainer: Color.lerp(panelTokens.warn, baseScheme.surface, 0.8)!,
-    onSecondaryContainer: Color.lerp(
-      panelTokens.warn,
-      baseScheme.onSurface,
-      0.2,
-    )!,
-  );
+  final colorScheme = isDark
+      ? baseScheme.copyWith(
+          primary: _brand,
+          onPrimary: _navy,
+          primaryContainer: const Color(0xFF1F4A45),
+          onPrimaryContainer: const Color(0xFFBFF3DC),
+          secondary: panelTokens.warn,
+          onSecondary: _navy,
+          secondaryContainer: const Color(0xFF3A3222),
+          onSecondaryContainer: const Color(0xFFFCE3B5),
+          tertiary: panelTokens.live,
+          onTertiary: _navy,
+          tertiaryContainer: const Color(0xFF1F4A45),
+          onTertiaryContainer: const Color(0xFFBFF3DC),
+          error: const Color(0xFFE14747),
+          onError: Colors.white,
+          errorContainer: const Color(0xFF4A2026),
+          onErrorContainer: const Color(0xFFFFD9D9),
+          surface: _navy,
+          onSurface: const Color(0xFFF1F5F9),
+          onSurfaceVariant: const Color(0xFF97A5BA),
+          surfaceDim: const Color(0xFF0C1320),
+          surfaceBright: const Color(0xFF2B3850),
+          surfaceContainerLowest: const Color(0xFF0C1320),
+          surfaceContainerLow: const Color(0xFF182234),
+          surfaceContainer: const Color(0xFF1C273A),
+          surfaceContainerHigh: const Color(0xFF242F42),
+          surfaceContainerHighest: const Color(0xFF2B3850),
+          outline: const Color(0xFF3A4A63),
+          outlineVariant: const Color(0xFF283448),
+          surfaceTint: Colors.transparent,
+          inverseSurface: const Color(0xFFF1F5F9),
+          onInverseSurface: _navy,
+          inversePrimary: const Color(0xFF1C9E6A),
+        )
+      : baseScheme.copyWith(
+          // Bright #3DDC97 is ~1.9:1 on white — too faint for text, which
+          // Material draws in `primary`. Light mode uses the dashboard's
+          // "brand-ink" green for primary; filled buttons/FAB keep _brand.
+          primary: const Color(0xFF1C7D56),
+          onPrimary: Colors.white,
+          primaryContainer: const Color(0xFFD8F8EA),
+          onPrimaryContainer: const Color(0xFF0B4A31),
+          secondary: panelTokens.warn,
+          onSecondary: _navy,
+          secondaryContainer: const Color(0xFFFDEBCF),
+          onSecondaryContainer: const Color(0xFF5C3A00),
+          tertiary: panelTokens.live,
+          onTertiary: Colors.white,
+          tertiaryContainer: const Color(0xFFD8F8EA),
+          onTertiaryContainer: const Color(0xFF0B4A31),
+          error: const Color(0xFFDC2828),
+          onError: Colors.white,
+          errorContainer: const Color(0xFFFDE2E2),
+          onErrorContainer: const Color(0xFF7A1111),
+          surface: const Color(0xFFF5F7FA),
+          onSurface: _navy,
+          onSurfaceVariant: const Color(0xFF5A687C),
+          surfaceDim: const Color(0xFFE7ECF3),
+          surfaceBright: Colors.white,
+          surfaceContainerLowest: Colors.white,
+          surfaceContainerLow: Colors.white,
+          surfaceContainer: const Color(0xFFEEF2F7),
+          surfaceContainerHigh: const Color(0xFFE7ECF3),
+          surfaceContainerHighest: const Color(0xFFDFE5EE),
+          outline: const Color(0xFFB6C1D0),
+          outlineVariant: const Color(0xFFD8DFE9),
+          surfaceTint: Colors.transparent,
+          inverseSurface: _navy,
+          onInverseSurface: const Color(0xFFF1F5F9),
+          inversePrimary: _brand,
+        );
 
   final ink = colorScheme.onSurface;
   final baseTextTheme = ThemeData(brightness: brightness).textTheme;
@@ -273,10 +328,13 @@ ThemeData _buildTheme(Brightness brightness) {
     dividerTheme: DividerThemeData(color: colorScheme.outlineVariant),
     cardTheme: CardThemeData(
       elevation: 0,
-      shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(24)),
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       color: colorScheme.surfaceContainerLow,
-      surfaceTintColor: colorScheme.surfaceTint,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedSuperellipseBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(color: colorScheme.outlineVariant),
+      ),
     ),
     // Same smooth "squircle" corners as the cards, for every surface that
     // pops up over the app.
@@ -308,8 +366,17 @@ ThemeData _buildTheme(Brightness brightness) {
     navigationBarTheme: NavigationBarThemeData(
       elevation: 1,
       height: 78,
-      backgroundColor: colorScheme.surfaceContainer,
-      indicatorColor: colorScheme.secondaryContainer,
+      backgroundColor: colorScheme.surfaceContainerLow,
+      indicatorColor: colorScheme.primaryContainer,
+      // Default selected icon color comes from the (warn-orange) secondary
+      // palette; keep it on the brand green like the indicator.
+      iconTheme: WidgetStateProperty.resolveWith(
+        (states) => IconThemeData(
+          color: states.contains(WidgetState.selected)
+              ? colorScheme.onPrimaryContainer
+              : colorScheme.onSurfaceVariant,
+        ),
+      ),
       labelTextStyle: WidgetStatePropertyAll(
         GoogleFonts.archivo(
           fontWeight: FontWeight.w600,
@@ -319,9 +386,9 @@ ThemeData _buildTheme(Brightness brightness) {
       ),
     ),
     navigationRailTheme: NavigationRailThemeData(
-      backgroundColor: colorScheme.surfaceContainer,
-      indicatorColor: colorScheme.secondaryContainer,
-      selectedIconTheme: IconThemeData(color: colorScheme.onSecondaryContainer),
+      backgroundColor: colorScheme.surfaceContainerLow,
+      indicatorColor: colorScheme.primaryContainer,
+      selectedIconTheme: IconThemeData(color: colorScheme.onPrimaryContainer),
       selectedLabelTextStyle: GoogleFonts.archivo(
         color: ink,
         fontWeight: FontWeight.w600,
@@ -329,6 +396,8 @@ ThemeData _buildTheme(Brightness brightness) {
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
+        backgroundColor: _brand,
+        foregroundColor: _navy,
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
         shape: RoundedSuperellipseBorder(
           borderRadius: BorderRadius.circular(20),
@@ -377,8 +446,8 @@ ThemeData _buildTheme(Brightness brightness) {
       }),
     ),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
-      backgroundColor: colorScheme.primaryContainer,
-      foregroundColor: colorScheme.onPrimaryContainer,
+      backgroundColor: _brand,
+      foregroundColor: _navy,
       shape: RoundedSuperellipseBorder(borderRadius: BorderRadius.circular(18)),
     ),
   );

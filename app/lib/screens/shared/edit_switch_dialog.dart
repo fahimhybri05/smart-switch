@@ -39,9 +39,9 @@ Future<void> editSwitchSettings(
     ref.invalidate(deviceConfigProvider(device));
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(friendlyErrorMessage(e, 'Save'))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(friendlyErrorMessage(e, 'Save'))));
     }
   }
 }
@@ -232,7 +232,8 @@ class _EditSwitchDialogState extends State<_EditSwitchDialog> {
               const SizedBox(height: Spacing.sm),
               _HoursMinutesField(
                 label: 'Max run time',
-                helper: 'Turns it off automatically after this long ON. '
+                helper:
+                    'Turns it off automatically after this long ON. '
                     'Leave blank for no limit.',
                 controllers: _maxOn,
                 maxSeconds: SwitchConfig.maxOnSecondsLimit,
@@ -240,7 +241,8 @@ class _EditSwitchDialogState extends State<_EditSwitchDialog> {
               const SizedBox(height: Spacing.md),
               _HoursMinutesField(
                 label: 'Min off time',
-                helper: 'After turning off, it can\'t be turned on again '
+                helper:
+                    'After turning off, it can\'t be turned on again '
                     'remotely until this much time has passed. Leave blank '
                     'for none.',
                 controllers: _minOff,

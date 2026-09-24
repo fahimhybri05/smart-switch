@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 
 import { EmptyState, ErrorState, HouseholdSelect, PageHeader } from '@/components/common';
 import { SceneQuickRow } from '@/components/scenes/scene-quick-row';
+import { SHOW_SCENES } from '@/lib/features';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDevices, useHouseholds, useSelectedHousehold, useSwitchLabeler, useSwitchViews } from '@/lib/queries';
 import { cn } from '@/lib/utils';
@@ -91,7 +92,9 @@ export function Overview() {
         </EmptyState>
       ) : (
         <div className="grid gap-6">
-          <SceneQuickRow householdId={selected?.id} ready={!households.isLoading} labelFor={labelFor} />
+          {SHOW_SCENES && (
+            <SceneQuickRow householdId={selected?.id} ready={!households.isLoading} labelFor={labelFor} />
+          )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Stat icon={Wifi} label="Devices online" value={`${online}/${devices.length}`} />
             <Stat icon={Power} label="Switches on" value={`${onCount}/${allSwitches.length}`} />

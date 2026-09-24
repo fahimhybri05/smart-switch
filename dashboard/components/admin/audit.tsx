@@ -14,7 +14,7 @@ import { qk } from '@/lib/cache';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import type { AuditEntry } from '@/lib/types';
 
-const ACTION_LABELS: Record<string, string> = {
+export const ACTION_LABELS: Record<string, string> = {
   'user.disable': 'Disabled user',
   'user.enable': 'Enabled user',
   'user.logout': 'Forced sign-out',
@@ -30,7 +30,7 @@ const ACTION_LABELS: Record<string, string> = {
 
 const DESTRUCTIVE = new Set(['user.delete', 'user.disable', 'api_key.revoke', 'device.unclaim']);
 
-function actionVariant(action: string): BadgeProps['variant'] {
+export function actionVariant(action: string): BadgeProps['variant'] {
   if (DESTRUCTIVE.has(action)) return 'destructive';
   if (action.startsWith('device.')) return 'warning';
   return 'secondary';
