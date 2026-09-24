@@ -75,6 +75,13 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
   String? _lastKnownIp;
   String _chip = 'esp32';
 
+  // Account claim runs as soon as WiFi provisioning succeeds, independent of
+  // LAN discovery (which often fails on segmented/IoT networks) — so a new
+  // device always lands on the signed-in account. Shared so the discovery
+  // path awaits the same attempt instead of claiming twice.
+  Future<bool>? _claimFuture;
+  String? _claimError;
+
   final _manualIdController = TextEditingController();
   final _manualSecretController = TextEditingController();
   final _manualIpController = TextEditingController();
@@ -159,6 +166,8 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
     setState(() {
       _backStack.add(_step);
       _deviceId = result.deviceId;
+      _claimFuture = null;
+      _claimError = null;
       _cloudSecret = result.cloudSecret;
       _chip = result.chip;
       _nameController.text = result.deviceId;
@@ -176,6 +185,8 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
     setState(() {
       _backStack.add(_step);
       _deviceId = id;
+      _claimFuture = null;
+      _claimError = null;
       _cloudSecret = secret;
       _nameController.text = id;
       _errorText = null;
@@ -221,6 +232,8 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
         });
         return;
       }
+
+      unawaited(_startClaim());
 
       // _findDevice manages `_busy`/`_errorText` itself from here — don't
       // let this function's cleanup clobber its state (it starts a new
@@ -275,12 +288,21 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
 
     if (!mounted) return;
     if (found == null) {
+      // Not visible on this LAN, but if the account claim went through the
+      // device is already usable via the cloud — finish setup without it.
+      if (mounted) setState(() => _statusText = 'Adding to your account…');
+      if (await _startClaim()) {
+        await _finishCloudOnly();
+        return;
+      }
+      if (!mounted) return;
       setState(() {
         _busy = false;
         _errorText =
+            _claimError ??
             "Couldn't find the device automatically yet. Make sure your "
-            "phone has reconnected to your home WiFi, then try again — or "
-            'enter its IP address manually (check your router).';
+                "phone has reconnected to your home WiFi, then try again — or "
+                'enter its IP address manually (check your router).';
       });
       return;
     }
@@ -312,24 +334,12 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
           .setTimezone(DateTime.now().timeZoneOffset.inMinutes);
     } catch (_) {}
 
-    if (ref.read(authProvider) != null &&
-        ref.read(backendUrlProvider) != null) {
-      try {
-        if (mounted) setState(() => _statusText = 'Enabling remote control…');
-        final accessToken = await ensureFreshAccessToken(ref);
-        await BackendDevicesClient(
-          baseUrl: ref.read(backendUrlProvider)!,
-          accessToken: accessToken,
-        ).claim(
-          deviceId: deviceId,
-          cloudSecret: _cloudSecret!,
-          friendlyName: known.friendlyName,
-        );
-      } on BackendApiException catch (_) {
-        // Non-fatal — most likely this board's firmware predates
-        // cloud_client, so the QR's secret doesn't match anything the
-        // backend can verify yet. Local control still works either way.
-      } catch (_) {}
+    if (mounted) setState(() => _statusText = 'Adding to your account…');
+    final claimed = await _startClaim();
+    if (!claimed && _claimError != null && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_claimError!)));
     }
 
     if (mounted) {
@@ -339,6 +349,83 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
         _step = _Step.room;
       });
     }
+  }
+
+  Future<bool> _startClaim() => _claimFuture ??= _claimToAccount();
+
+  /// Claims the device to the signed-in account's household, retrying for
+  /// ~30 s: right after provisioning the board is still joining WiFi and
+  /// reaching the backend (a re-flashed board only re-pairs its new secret
+  /// once it connects), so early attempts can legitimately get a 401.
+  Future<bool> _claimToAccount() async {
+    final backendUrl = ref.read(backendUrlProvider);
+    if (ref.read(authProvider) == null || backendUrl == null) return false;
+    final deviceId = _deviceId!;
+    final name = _nameController.text.trim().isEmpty
+        ? deviceId
+        : _nameController.text.trim();
+
+    for (var attempt = 1; attempt <= 8; attempt++) {
+      try {
+        final accessToken = await ensureFreshAccessToken(ref);
+        await BackendDevicesClient(
+          baseUrl: backendUrl,
+          accessToken: accessToken,
+        ).claim(
+          deviceId: deviceId,
+          cloudSecret: _cloudSecret!,
+          friendlyName: name,
+        );
+        _claimError = null;
+        // Pull it into this phone's device list right away.
+        unawaited(ref.read(deviceSyncStatusProvider.notifier).retry());
+        return true;
+      } on BackendApiException catch (e) {
+        if (e.statusCode == 409) {
+          _claimError =
+              'This device is already registered to another account. Ask its '
+              'owner to remove it, or an admin to unclaim it.';
+          return false;
+        }
+        if (e.statusCode == 403) {
+          _claimError = 'Only a household owner can add devices.';
+          return false;
+        }
+        _claimError =
+            "The server didn't accept this device yet. Make sure it's powered "
+            'and online, then try again.';
+      } catch (_) {
+        _claimError = "Couldn't reach the server to add this device.";
+      }
+      if (attempt < 8) await Future<void>.delayed(const Duration(seconds: 4));
+    }
+    return false;
+  }
+
+  /// Setup finish for a claimed device the phone can't see on the LAN: saved
+  /// without an IP (the app controls it through the cloud), room step
+  /// skipped since it needs a local connection.
+  Future<void> _finishCloudOnly() async {
+    final deviceId = _deviceId!;
+    await ref
+        .read(knownDevicesProvider.notifier)
+        .upsert(
+          KnownDevice(
+            deviceId: deviceId,
+            mdnsHostname: null,
+            lastKnownIp: null,
+            friendlyName: _nameController.text.trim().isEmpty
+                ? deviceId
+                : _nameController.text.trim(),
+          ),
+        );
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _statusText = null;
+      _backStack.add(_step);
+      _step = _Step.name;
+    });
   }
 
   Future<void> _useManualIp(String ip) async {
@@ -550,11 +637,7 @@ class _ErrorBanner extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.error_outline_rounded,
-            color: colorScheme.error,
-            size: 20,
-          ),
+          Icon(Icons.error_outline_rounded, color: colorScheme.error, size: 20),
           const SizedBox(width: Spacing.sm),
           Expanded(
             child: Text(
@@ -910,7 +993,9 @@ class _FindDeviceStep extends StatelessWidget {
             // which an IPv4 address needs — use the standard text keyboard
             // (which has a period) restricted to digits and dots instead.
             keyboardType: TextInputType.text,
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+            ],
             autocorrect: false,
           ),
           const SizedBox(height: Spacing.sm),
@@ -1111,9 +1196,7 @@ class _QrScanPageState extends State<_QrScanPage> {
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: Colors.white,
-                shadows: const [
-                  Shadow(color: Colors.black87, blurRadius: 8),
-                ],
+                shadows: const [Shadow(color: Colors.black87, blurRadius: 8)],
               ),
             ),
           ),

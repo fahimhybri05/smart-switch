@@ -26,7 +26,8 @@ export function verifyAccessToken(token) {
   return jwt.verify(token, jwtSecret());
 }
 
-function hashToken(rawToken) {
+/** SHA-256 hex — shared by refresh tokens, API keys and hook tokens. */
+export function hashToken(rawToken) {
   return crypto.createHash('sha256').update(rawToken).digest('hex');
 }
 
@@ -55,5 +56,17 @@ export async function revokeRefreshToken(rawToken) {
   await pool.query(
     'UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = $1',
     [hashToken(rawToken)],
+  );
+}
+
+/**
+ * Revokes every still-active refresh token for `userId` (password change
+ * signs every session out). Pass a transaction client as `db` to make it
+ * part of a larger transaction.
+ */
+export async function revokeAllRefreshTokens(userId, db = pool) {
+  await db.query(
+    'UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL',
+    [userId],
   );
 }

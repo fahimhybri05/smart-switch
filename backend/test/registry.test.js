@@ -30,7 +30,7 @@ test('relayToDevice returns null when the device has no live connection', () => 
   assert.equal(result, null);
 });
 
-test('relayToDevice forwards to the device socket, resolveDeviceResponse routes the reply back to the right client', () => {
+test('relayToDevice forwards to the device socket, resolveDeviceResponse routes the reply back to the right client', async () => {
   const deviceWs = new FakeSocket();
   const clientWs = new FakeSocket();
   registerDevice('esp-registry-test-1', deviceWs);
@@ -48,6 +48,8 @@ test('relayToDevice forwards to the device socket, resolveDeviceResponse routes 
   assert.deepEqual(deviceWs.sent[0].body, { state: 'ON' });
 
   resolveDeviceResponse(internalReqId, 200, { state: 'ON' });
+  // The reply is delivered via the relay promise's .then — one tick later.
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(clientWs.sent.length, 1);
   // The client gets back ITS OWN reqId, not the internal device-facing one.

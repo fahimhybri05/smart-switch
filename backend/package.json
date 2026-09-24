@@ -10,7 +10,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --test test/",
-    "migrate": "node src/db/migrate.js"
+    "migrate": "node src/db/migrate.js",
+    "make-admin": "node src/scripts/makeAdmin.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

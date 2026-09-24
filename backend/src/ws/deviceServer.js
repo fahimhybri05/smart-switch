@@ -7,6 +7,7 @@ import { takeAttribution } from './attribution.js';
 import {
   broadcastToHousehold,
   getDeviceSockets,
+  isDeviceOnline,
   registerDevice,
   rejectPendingForDevice,
   resolveDeviceResponse,
@@ -16,14 +17,40 @@ import {
 const AUTH_TIMEOUT_MS = 5_000;
 const HEARTBEAT_INTERVAL_MS = 25_000;
 
-/** Marks `deviceId` online and returns its household, given a row already
+const DIAG_KEYS = ['fw', 'resetReason', 'uptimeS', 'freeHeap', 'rssi'];
+
+/**
+ * Firmware diagnostics from the auth frame's optional fields (older
+ * firmware omits them), sanitized for storage in devices.diagnostics:
+ * numbers stay numbers, anything else becomes a short string. Returns
+ * null when the frame carried none of them.
+ */
+export function extractDiagnostics(msg) {
+  const diag = {};
+  for (const k of DIAG_KEYS) {
+    const v = msg?.[k];
+    if (v === undefined || v === null) continue;
+    diag[k] = typeof v === 'number' && Number.isFinite(v) ? v : String(v).slice(0, 64);
+  }
+  if (Object.keys(diag).length === 0) {
+    return null;
+  }
+  diag.at = new Date().toISOString();
+  return diag;
+}
+
+/** Marks `deviceId` online (plus last_connected_at and, when present, the
+ * auth frame's diagnostics) and returns its household, given a row already
  * known to exist and whose secret already matched. Single unlocked
  * statement — no held client checkout, no transaction — this is the hot
  * path for the routine "already-claimed device reconnecting" case. */
-async function markExistingDeviceOnline(deviceId, householdId) {
+async function markExistingDeviceOnline(deviceId, householdId, diagnostics) {
   await pool.query(
-    'UPDATE devices SET is_online = true, last_seen_at = now() WHERE device_id = $1',
-    [deviceId],
+    `UPDATE devices
+     SET is_online = true, last_seen_at = now(), last_connected_at = now(),
+         diagnostics = COALESCE($2::jsonb, diagnostics)
+     WHERE device_id = $1`,
+    [deviceId, diagnostics ? JSON.stringify(diagnostics) : null],
   );
   return { householdId };
 }
@@ -31,8 +58,11 @@ async function markExistingDeviceOnline(deviceId, householdId) {
 /** Looks up (or trust-on-first-use creates) the device row, verifying the
  * presented secret against whatever hash is already stored. Mirrors
  * routes/devices.js's claim logic so it doesn't matter whether the device
- * or the claiming app connects/registers first. */
-async function authenticateDevice(deviceId, cloudSecret) {
+ * or the claiming app connects/registers first. A row whose hash is NULL
+ * (an admin ran "reset secret", e.g. after a factory reset generated a new
+ * secret on the device) adopts the presented secret — trust-on-next-use,
+ * the same trust model as the first-ever connect. */
+export async function authenticateDevice(deviceId, cloudSecret, diagnostics = null) {
   const secretHash = hashDeviceSecret(cloudSecret);
 
   // Plain unlocked read first — this alone resolves the common case (row
@@ -45,10 +75,20 @@ async function authenticateDevice(deviceId, cloudSecret) {
   const existing = rows[0];
 
   if (existing) {
+    if (existing.cloud_secret_hash === null) {
+      return adoptSecret(deviceId, secretHash, diagnostics);
+    }
     if (existing.cloud_secret_hash !== secretHash) {
+      // An UNCLAIMED board presenting a different secret was almost always
+      // erased/re-flashed (a fresh flash generates a new secret). Nobody owns
+      // the row, so re-trusting it is the same risk as a brand-new device.
+      // Claimed devices still require an exact match.
+      if (existing.household_id === null) {
+        return repairUnclaimed(deviceId, secretHash, diagnostics);
+      }
       return null;
     }
-    return markExistingDeviceOnline(deviceId, existing.household_id);
+    return markExistingDeviceOnline(deviceId, existing.household_id, diagnostics);
   }
 
   // First-ever-connect (trust-on-first-use): two devices with the same
@@ -60,11 +100,12 @@ async function authenticateDevice(deviceId, cloudSecret) {
   // falls through to re-read and validate against whatever row won,
   // identically to the "row already exists" branch above.
   const inserted = await pool.query(
-    `INSERT INTO devices (device_id, cloud_secret_hash, friendly_name, is_online, last_seen_at)
-     VALUES ($1, $2, $1, true, now())
+    `INSERT INTO devices (device_id, cloud_secret_hash, friendly_name, is_online, last_seen_at,
+                          last_connected_at, diagnostics)
+     VALUES ($1, $2, $1, true, now(), now(), $3::jsonb)
      ON CONFLICT (device_id) DO NOTHING
      RETURNING household_id`,
-    [deviceId, secretHash],
+    [deviceId, secretHash, diagnostics ? JSON.stringify(diagnostics) : null],
   );
   if (inserted.rows[0]) {
     return { householdId: inserted.rows[0].household_id };
@@ -72,22 +113,65 @@ async function authenticateDevice(deviceId, cloudSecret) {
 
   // Lost the race — some other connection (or a concurrent /claim) won.
   // Re-read and validate exactly as the existing-row branch does.
-  const { rows: afterRace } = await pool.query(
+  return revalidate(deviceId, secretHash, diagnostics);
+}
+
+/** NULL hash -> presented hash, atomically: of two racers only one UPDATE
+ * matches `cloud_secret_hash IS NULL`; the other re-validates against the
+ * secret that won. */
+async function adoptSecret(deviceId, secretHash, diagnostics) {
+  const { rows } = await pool.query(
+    `UPDATE devices
+     SET cloud_secret_hash = $2, is_online = true, last_seen_at = now(), last_connected_at = now(),
+         diagnostics = COALESCE($3::jsonb, diagnostics)
+     WHERE device_id = $1 AND cloud_secret_hash IS NULL
+     RETURNING household_id`,
+    [deviceId, secretHash, diagnostics ? JSON.stringify(diagnostics) : null],
+  );
+  if (rows[0]) {
+    console.log(`device ${deviceId} adopted a new cloud secret (hash was reset)`);
+    return { householdId: rows[0].household_id };
+  }
+  return revalidate(deviceId, secretHash, diagnostics);
+}
+
+/** Unclaimed row, new secret -> adopt it. Guarded by `household_id IS NULL`
+ * so a claim that lands concurrently is never overwritten. */
+async function repairUnclaimed(deviceId, secretHash, diagnostics) {
+  const { rows } = await pool.query(
+    `UPDATE devices
+     SET cloud_secret_hash = $2, is_online = true, last_seen_at = now(), last_connected_at = now(),
+         diagnostics = COALESCE($3::jsonb, diagnostics)
+     WHERE device_id = $1 AND household_id IS NULL
+     RETURNING household_id`,
+    [deviceId, secretHash, diagnostics ? JSON.stringify(diagnostics) : null],
+  );
+  if (rows[0]) {
+    console.log(`unclaimed device ${deviceId} re-paired with a new cloud secret`);
+    return { householdId: null };
+  }
+  return revalidate(deviceId, secretHash, diagnostics);
+}
+
+async function revalidate(deviceId, secretHash, diagnostics) {
+  const { rows } = await pool.query(
     'SELECT household_id, cloud_secret_hash FROM devices WHERE device_id = $1',
     [deviceId],
   );
-  const winner = afterRace[0];
+  const winner = rows[0];
   if (!winner || winner.cloud_secret_hash !== secretHash) {
     return null;
   }
-  return markExistingDeviceOnline(deviceId, winner.household_id);
+  return markExistingDeviceOnline(deviceId, winner.household_id, diagnostics);
 }
 
+/** Returns the device's household id (null when unclaimed). */
 async function markOffline(deviceId) {
-  await pool.query(
-    'UPDATE devices SET is_online = false WHERE device_id = $1',
+  const { rows } = await pool.query(
+    'UPDATE devices SET is_online = false WHERE device_id = $1 RETURNING household_id',
     [deviceId],
   );
+  return rows[0]?.household_id ?? null;
 }
 
 async function recordStateChange(deviceId, channelIdx, state) {
@@ -126,7 +210,8 @@ export function handleDeviceConnection(ws) {
           return ws.close(4001, 'expected {deviceId, cloudSecret}');
         }
         try {
-          const result = await authenticateDevice(msg.deviceId, msg.cloudSecret);
+          const diagnostics = extractDiagnostics(msg);
+          const result = await authenticateDevice(msg.deviceId, msg.cloudSecret, diagnostics);
           if (!result) {
             console.warn(`device auth rejected: invalid secret for ${msg.deviceId}`);
             return ws.close(4003, 'invalid device secret');
@@ -137,8 +222,7 @@ export function handleDeviceConnection(ws) {
           ws.isAlive = true;
           registerDevice(deviceId, ws);
           // Firmware diagnostics (optional fields; older firmware omits them).
-          const diag = ['fw', 'resetReason', 'uptimeS', 'freeHeap', 'rssi']
-            .filter((k) => msg[k] !== undefined)
+          const diag = DIAG_KEYS.filter((k) => msg[k] !== undefined)
             .map((k) => `${k}=${JSON.stringify(msg[k])}`)
             .join(' ');
           console.log(`device connected: ${deviceId}${diag ? ` (${diag})` : ''}`);
@@ -239,13 +323,24 @@ export function handleDeviceConnection(ws) {
       console.log(
         `device disconnected: ${deviceId} (code=${code} reason=${reason})`,
       );
-      unregisterDevice(deviceId, ws);
+      const wasCurrent = unregisterDevice(deviceId, ws);
       // Fail any in-flight relay to this device fast instead of leaving it
       // to sit out the full RELAY_TIMEOUT_MS now that the socket is gone.
       rejectPendingForDevice(deviceId);
-      markOffline(deviceId).catch((err) =>
-        console.error(`failed to mark ${deviceId} offline`, err),
-      );
+      // A socket superseded by a newer connection from the same device
+      // (registerDevice closes the old one with 4000) must not mark the
+      // device offline or tell clients it went away — it didn't.
+      if (wasCurrent) {
+        markOffline(deviceId)
+          .then((householdId) => {
+            // Skip if it already reconnected while the UPDATE ran.
+            if (householdId && !isDeviceOnline(deviceId)) {
+              return broadcastToHousehold(householdId, { event: 'device_offline', deviceId });
+            }
+            return undefined;
+          })
+          .catch((err) => console.error(`failed to mark ${deviceId} offline`, err));
+      }
     }
   });
 }

@@ -11,7 +11,7 @@ export async function getHouseholdDevicesSnapshot(householdIds) {
     return [];
   }
   const { rows } = await pool.query(
-    `SELECT d.device_id, d.friendly_name, d.is_online, d.last_seen_at,
+    `SELECT d.device_id, d.household_id, d.friendly_name, d.is_online, d.last_seen_at,
             COALESCE(
               json_agg(
                 json_build_object(
@@ -24,7 +24,7 @@ export async function getHouseholdDevicesSnapshot(householdIds) {
      FROM devices d
      LEFT JOIN cached_channel_state c ON c.device_id = d.device_id
      WHERE d.household_id = ANY($1::bigint[])
-     GROUP BY d.device_id, d.friendly_name, d.is_online, d.last_seen_at
+     GROUP BY d.device_id, d.household_id, d.friendly_name, d.is_online, d.last_seen_at
      ORDER BY d.device_id`,
     [householdIds],
   );

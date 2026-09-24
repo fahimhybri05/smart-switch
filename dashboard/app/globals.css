@@ -1,0 +1,99 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light theme */
+    --background: 216 33% 97%;
+    --foreground: 219 42% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 219 42% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 219 42% 11%;
+    --brand: 154 69% 55%; /* #3DDC97 */
+    --brand-ink: 156 64% 30%; /* readable green text on light surfaces */
+    --primary: 154 69% 55%;
+    --primary-foreground: 219 42% 11%;
+    --secondary: 214 32% 93%;
+    --secondary-foreground: 219 42% 11%;
+    --muted: 214 32% 94%;
+    --muted-foreground: 215 16% 42%;
+    --accent: 214 32% 92%;
+    --accent-foreground: 219 42% 11%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --warning: 35 92% 50%;
+    --warning-foreground: 219 42% 11%;
+    --border: 214 28% 88%;
+    --input: 214 28% 86%;
+    --ring: 154 69% 45%;
+    --shadow: 219 42% 11%;
+    --radius: 1.25rem;
+  }
+
+  .dark {
+    /* Dark theme — navy #101827 */
+    --background: 219 42% 11%;
+    --foreground: 210 40% 96%;
+    --card: 219 36% 15%;
+    --card-foreground: 210 40% 96%;
+    --popover: 219 36% 14%;
+    --popover-foreground: 210 40% 96%;
+    --brand: 154 69% 55%;
+    --brand-ink: 154 69% 60%;
+    --primary: 154 69% 55%;
+    --primary-foreground: 219 42% 11%;
+    --secondary: 218 30% 20%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 218 30% 19%;
+    --muted-foreground: 215 20% 66%;
+    --accent: 218 30% 21%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 72% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --warning: 38 92% 56%;
+    --warning-foreground: 219 42% 11%;
+    --border: 218 28% 22%;
+    --input: 218 28% 25%;
+    --ring: 154 69% 55%;
+    --shadow: 222 60% 3%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'ss01' on;
+  }
+
+  code,
+  pre,
+  kbd {
+    @apply font-mono;
+  }
+}
+
+@layer components {
+  /* Smooth "squircle" corners where supported (progressive enhancement);
+     a large border-radius is the fallback everywhere else. */
+  .squircle {
+    border-radius: var(--radius);
+  }
+  @supports (corner-shape: squircle) {
+    .squircle {
+      corner-shape: squircle;
+      border-radius: calc(var(--radius) * 1.6);
+    }
+  }
+
+  .code-block {
+    @apply overflow-x-auto rounded-lg border bg-muted/60 p-4 font-mono text-[13px] leading-relaxed;
+  }
+}

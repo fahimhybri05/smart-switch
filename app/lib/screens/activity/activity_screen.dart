@@ -86,6 +86,9 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     'scene' => Icons.auto_awesome_outlined,
     'device' => Icons.schedule_outlined,
     'voice' => Icons.mic_none_outlined,
+    'api' => Icons.api_rounded,
+    'hook' => Icons.link_rounded,
+    'dashboard' => Icons.dashboard_outlined,
     _ => Icons.touch_app_outlined,
   };
 
@@ -96,6 +99,9 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
     'scene' => 'Scene',
     'device' => 'Device schedule',
     'voice' => 'Google Assistant',
+    'api' => 'API',
+    'hook' => 'Webhook URL',
+    'dashboard' => 'Web dashboard',
     _ => entry.actorEmail ?? 'App',
   };
 

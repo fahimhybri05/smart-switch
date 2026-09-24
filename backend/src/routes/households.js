@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { attachHouseholds, isHouseholdOwner } from '../middleware/household.js';
+import { attachHouseholds, isHouseholdMember, isHouseholdOwner } from '../middleware/household.js';
 import { requireAuth } from '../middleware/auth.js';
 import { pool } from '../db/pool.js';
 
@@ -154,11 +154,58 @@ async function respondToInvite(req, res, status) {
 householdsRouter.post('/invites/:id/accept', (req, res) => respondToInvite(req, res, 'accepted'));
 householdsRouter.post('/invites/:id/decline', (req, res) => respondToInvite(req, res, 'declined'));
 
+/** Pending invites sent FROM this household (visible to any member; only
+ * owners can cancel them). */
+householdsRouter.get('/:id/invites', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || !isHouseholdMember(req, id)) {
+    return res.status(404).json({ error: 'household not found' });
+  }
+  const { rows } = await pool.query(
+    `SELECT i.id, i.invited_user_id AS "invitedUserId", u.email AS "invitedEmail",
+            b.email AS "invitedByEmail", i.created_at AS "createdAt"
+     FROM household_invites i
+     JOIN users u ON u.id = i.invited_user_id
+     JOIN users b ON b.id = i.invited_by_user_id
+     WHERE i.household_id = $1 AND i.status = 'pending'
+     ORDER BY i.created_at DESC`,
+    [id],
+  );
+  res.json({ invites: rows });
+});
+
+/** Cancels a pending invite — owner-only. */
+householdsRouter.delete('/:id/invites/:inviteId', async (req, res) => {
+  const id = Number(req.params.id);
+  const inviteId = Number(req.params.inviteId);
+  if (!Number.isInteger(id) || !isHouseholdOwner(req, id)) {
+    return res.status(404).json({ error: 'household not found' });
+  }
+  if (!Number.isInteger(inviteId)) {
+    return res.status(404).json({ error: 'invite not found' });
+  }
+  const { rows } = await pool.query(
+    `DELETE FROM household_invites
+     WHERE id = $1 AND household_id = $2 AND status = 'pending'
+     RETURNING id`,
+    [inviteId, id],
+  );
+  if (rows.length === 0) {
+    return res.status(404).json({ error: 'invite not found' });
+  }
+  res.status(204).end();
+});
+
+/** Owners may remove anyone; any member may remove themselves (leave). The
+ * last owner can never be removed, whoever asks. */
 householdsRouter.delete('/:id/members/:userId', async (req, res) => {
   const id = Number(req.params.id);
   const userId = Number(req.params.userId);
-  if (!Number.isInteger(id) || !isHouseholdOwner(req, id) || !Number.isInteger(userId)) {
+  if (!Number.isInteger(id) || !Number.isInteger(userId) || !isHouseholdMember(req, id)) {
     return res.status(404).json({ error: 'household not found' });
+  }
+  if (userId !== req.userId && !isHouseholdOwner(req, id)) {
+    return res.status(403).json({ error: 'only a household owner can remove other members' });
   }
   // Atomic check-and-delete — the previous version read all members,
   // computed ownerCount, and only then issued the DELETE as three separate

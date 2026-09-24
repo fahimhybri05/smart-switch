@@ -118,8 +118,11 @@ try {
 }
 
 const port = process.env.PORT || 3000;
-server.listen(port, () => {
-  console.log(`smart-switch-backend listening on :${port}`);
+// HOST unset keeps the old listen-on-all-interfaces behaviour; production
+// sets HOST=127.0.0.1 (see .env.example).
+const host = process.env.HOST || undefined;
+server.listen(port, host, () => {
+  console.log(`smart-switch-backend listening on ${host ?? ''}:${port}`);
 });
 
 const stopAutomationScheduler = startAutomationScheduler();

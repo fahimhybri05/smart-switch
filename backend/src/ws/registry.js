@@ -26,10 +26,15 @@ export function registerDevice(deviceId, ws) {
   deviceSockets.set(deviceId, ws);
 }
 
+/** Removes `ws` only if it is still the registered socket for `deviceId`
+ * (a superseded socket closing must not unregister its replacement).
+ * Returns true when it was — i.e. the device really just went offline. */
 export function unregisterDevice(deviceId, ws) {
   if (deviceSockets.get(deviceId) === ws) {
     deviceSockets.delete(deviceId);
+    return true;
   }
+  return false;
 }
 
 export function isDeviceOnline(deviceId) {
@@ -42,6 +47,22 @@ export function getDeviceSockets() {
   return deviceSockets.values();
 }
 
+/** Ids of every device with a live socket right now (admin console). */
+export function getOnlineDeviceIds() {
+  return [...deviceSockets.keys()];
+}
+
+/** Closes `deviceId`'s live socket, if any (its close handler does the
+ * usual unregister/markOffline). Returns true when a socket was closed. */
+export function disconnectDevice(deviceId, code = 4000, reason = 'closed by server') {
+  const ws = deviceSockets.get(deviceId);
+  if (!ws) {
+    return false;
+  }
+  ws.close(code, reason);
+  return true;
+}
+
 export function registerClient(userId, ws) {
   if (!clientSocketsByUser.has(userId)) {
     clientSocketsByUser.set(userId, new Set());
@@ -51,6 +72,23 @@ export function registerClient(userId, ws) {
 
 export function unregisterClient(userId, ws) {
   clientSocketsByUser.get(userId)?.delete(ws);
+}
+
+/** Closes every open app/dashboard WebSocket of `userId` — a client WS is
+ * only authenticated at upgrade time, so without this a disabled or
+ * signed-out user's open connection would keep receiving events and
+ * relaying commands. Returns how many were closed. */
+export function closeClientSockets(userId, code = 4001, reason = 'session revoked') {
+  const sockets = clientSocketsByUser.get(userId);
+  if (!sockets) {
+    return 0;
+  }
+  let closed = 0;
+  for (const ws of [...sockets]) {
+    ws.close(code, reason);
+    closed += 1;
+  }
+  return closed;
 }
 
 /** Sends `payload` to every open client connection for `userId`. */
@@ -87,7 +125,7 @@ function sendRelay(deviceId, { method, path, body }) {
   }
 
   const reqId = crypto.randomUUID();
-  return new Promise((resolve, reject) => {
+  const promise = new Promise((resolve, reject) => {
     const cleanup = () => {
       pendingRequests.delete(reqId);
       pendingReqIdsByDevice.get(deviceId)?.delete(reqId);
@@ -117,6 +155,9 @@ function sendRelay(deviceId, { method, path, body }) {
 
     deviceWs.send(JSON.stringify({ reqId, method, path, body }));
   });
+  // Exposed so relayToDevice can report which device-facing reqId it used.
+  promise.reqId = reqId;
+  return promise;
 }
 
 /**
@@ -143,7 +184,7 @@ export function relayToDevice(deviceId, { method, path, body }, clientWs, client
   const promise = sendRelay(deviceId, { method, path, body });
   if (!promise) {
     clientWs?.send(JSON.stringify({ reqId: clientReqId, status: 0, error: 'device_offline' }));
-    return;
+    return null;
   }
   promise
     .then(({ status, body: respBody }) => {
@@ -152,6 +193,7 @@ export function relayToDevice(deviceId, { method, path, body }, clientWs, client
     .catch((err) => {
       clientWs?.send(JSON.stringify({ reqId: clientReqId, status: 0, error: err.code ?? 'device_timeout' }));
     });
+  return promise.reqId;
 }
 
 /**
