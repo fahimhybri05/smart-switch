@@ -174,3 +174,18 @@ test('POST /devices/:id/command attributes to the given source (default widget)'
 
   assert.equal((await command('ON', { source: 'api' })).status, 400);
 });
+
+test('POST /devices/:id/command: factory reset is owner-only, reboot is any member', async (t) => {
+  mockDb(); // role: 'member'
+  const device = withDevice(t);
+  const call = await start(t);
+  const command = (path) =>
+    call(`/devices/${DEVICE}/command`, { method: 'POST', body: { method: 'POST', path, body: { confirm: 'FACTORY_RESET' } } });
+
+  const reset = await command('/api/factory-reset');
+  assert.equal(reset.status, 403);
+  assert.equal(device.sent.filter((m) => m.path === '/api/factory-reset').length, 0, 'must never reach the device');
+
+  assert.equal((await command('/api/reboot')).status, 200);
+  assert.equal(device.sent.filter((m) => m.path === '/api/reboot').length, 1);
+});

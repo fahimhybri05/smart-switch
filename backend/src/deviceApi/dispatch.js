@@ -122,6 +122,12 @@ export async function dispatchDeviceApi(deviceId, method, path, body, { actorUse
     if ((method === 'POST' || method === 'GET') && path === '/api/wifi') {
       return await relayToDevice(deviceId, method, path, body);
     }
+    // Device maintenance — genuinely device-local, relayed through. The
+    // factory-reset owner-only check lives at the user-facing entry points
+    // (routes/devices.js, ws/clientServer.js), which know the caller's role.
+    if (method === 'POST' && (path === '/api/reboot' || path === '/api/factory-reset')) {
+      return await relayToDevice(deviceId, method, path, body);
+    }
     // Nearby networks as seen by the device's own radio (async scan —
     // `scanning: true` means poll again). Query string (`?refresh=1`) is
     // passed through untouched.

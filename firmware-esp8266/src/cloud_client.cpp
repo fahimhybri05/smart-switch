@@ -187,6 +187,22 @@ static void handleBackendRequest(const char *reqId, const char *method, const ch
     return;
   }
 
+  {
+    String bodyStr;
+    if (!body.isNull()) serializeJson(body, bodyStr);
+    int status;
+    String outBody;
+    if (httpApiHandleMaintenance(method, p, bodyStr, &status, &outBody)) {
+      JsonDocument parsed;
+      JsonVariant replyBody;
+      if (deserializeJson(parsed, outBody) == DeserializationError::Ok) {
+        replyBody = parsed.as<JsonVariant>();
+      }
+      sendReply(reqId, status, replyBody);
+      return;
+    }
+  }
+
   if (strcmp(method, "GET") == 0 && (p == "/api/wifi/scan" || p.startsWith("/api/wifi/scan?"))) {
     JsonDocument scan;
     deserializeJson(scan, wifiProvisioningScanJson(p.indexOf("refresh=1") >= 0));

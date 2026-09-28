@@ -200,6 +200,18 @@ no RTC driver yet, so after an offline reboot nothing fires until the page is op
 secure, channel}]}` (async, 30 s cache, strongest-first, deduped, max 20). Local route +
 cloud-relayed; used by the app's network picker and the offline page.
 
+**LAN control without the cloud**: while `!cloudClientIsConnected()`, the device answers
+`GET /api/config` (cached names/input modes, `local_only: true`, no schedules),
+`GET /api/channels` (live relay state) and `POST /api/channels/{i}/state` (applied directly,
+no backend lock/min-off check) itself instead of returning 503 — so the app, which is
+local-first, keeps working on the same network. Other edits still need the backend.
+
+**Reboot / factory reset**: `POST /api/reboot`, `POST /api/factory-reset` with
+`{"confirm":"FACTORY_RESET"}` — local routes and cloud-relayed. Reply 202, act ~800 ms later.
+Factory reset = same as the 7 s FLASH hold. Over the cloud the backend relays factory reset
+for household **owners only**; on the LAN there's no user identity, so anyone on that network
+can call it (same trust level as `/api/wifi`).
+
 **Switch names**: now included in `hw_config_push` (re-pushed on rename) and cached per
 channel, only as labels for the offline page.
 

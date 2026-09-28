@@ -34,6 +34,20 @@ async function isOwnedByUser(deviceId, userId) {
   return rows.length > 0;
 }
 
+// Wipes the device's WiFi + local config — owner-only, like the other
+// destructive household actions (see routes/automations.js).
+const OWNER_ONLY_PATHS = new Set(['/api/factory-reset']);
+
+async function isOwnerOfDevice(deviceId, userId) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM devices d
+     JOIN household_members hm ON hm.household_id = d.household_id
+     WHERE d.device_id = $1 AND hm.user_id = $2 AND hm.role = 'owner'`,
+    [deviceId, userId],
+  );
+  return rows.length > 0;
+}
+
 /** Sends the connecting user's current device list right away, so a
  * WS-connected client has a baseline even if the REST `GET /devices` call
  * (the other source of this data) is momentarily slow. Never allowed to
@@ -71,6 +85,11 @@ export function handleClientConnection(ws, userId) {
 
       if (!(await isOwnedByUser(deviceId, userId))) {
         return ws.send(JSON.stringify({ reqId, status: 0, error: 'not_found' }));
+      }
+      if (OWNER_ONLY_PATHS.has(path) && !(await isOwnerOfDevice(deviceId, userId))) {
+        return ws.send(
+          JSON.stringify({ reqId, status: 403, body: { error: 'only a household owner can factory-reset a device' } }),
+        );
       }
       if (!isDeviceOnline(deviceId)) {
         return ws.send(JSON.stringify({ reqId, status: 0, error: 'device_offline' }));

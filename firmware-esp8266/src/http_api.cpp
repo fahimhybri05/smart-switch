@@ -6,7 +6,9 @@
 #include "channel_control.h"
 #include "cloud_client.h"
 #include "config_store.h"
+#include "local_schedule.h"
 #include "local_web.h"
+#include "recovery_button.h"
 #include "relay_hal.h"
 #include "wifi_provisioning.h"
 
@@ -124,7 +126,70 @@ String httpApiBuildInfo() {
 
 static void handleGetInfo() { httpServer.send(200, "application/json", httpApiBuildInfo()); }
 
-static void handleGetConfig() { forwardAndReply("GET", "/api/config", ""); }
+// ------------------------------------------------ local fallback (no cloud)
+//
+// The backend owns config/schedules, but when this device can't reach it a
+// phone on the same LAN can still see and switch the relays: GET
+// /api/config and /api/channels are answered from the device's own cache
+// (names, input modes, live relay state) and channel commands are applied
+// directly. `local_only: true` tells the app it's looking at this reduced,
+// offline view. Edits (switches, schedules, settings) still need the
+// backend and keep failing with 503 until the link is back.
+
+static String buildLocalConfig() {
+  const SsConfig &cfg = configStore.cfg();
+  JsonDocument doc;
+  doc["device_id"] = cfg.device_id;
+  doc["name"] = cfg.device_id;
+  doc["board_type"] = cfg.board_type;
+  doc["channel_count"] = relayHalChannelCount();
+  doc["channel_driver"] = cfg.channel_driver;
+  doc["fw_version"] = cfg.fw_version;
+  JsonArray switches = doc["switches"].to<JsonArray>();
+  for (uint8_t i = 0; i < relayHalChannelCount(); i++) {
+    JsonObject sw = switches.add<JsonObject>();
+    sw["channel_idx"] = i;
+    const SsChannelHw *hw = nullptr;
+    for (uint8_t j = 0; j < cfg.channelHwCount; j++) {
+      if (cfg.channelHw[j].channel_idx == i) { hw = &cfg.channelHw[j]; break; }
+    }
+    sw["name"] = hw != nullptr ? hw->name : "";
+    sw["zone"] = "";
+    sw["type"] = "ON_OFF";
+    sw["default_boot_state"] = "OFF";
+    sw["input_mode"] = hw != nullptr ? hw->inputMode : "DISABLED";
+    sw["inching_ms"] = hw != nullptr ? hw->inchingMs : 0;
+    sw["locked"] = false;
+  }
+  doc["schedules"].to<JsonArray>(); // backend-owned — unknown offline
+  doc["utc_offset_min"] = localClockTzOffsetMin();
+  doc["interlock_enabled"] = cfg.interlockEnabled;
+  doc["local_only"] = true;
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+static String buildLocalChannels() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  for (uint8_t i = 0; i < relayHalChannelCount(); i++) {
+    JsonObject c = arr.add<JsonObject>();
+    c["channel_idx"] = i;
+    c["state"] = relayHalGetState(i) ? "ON" : "OFF";
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+static void handleGetConfig() {
+  if (!cloudClientIsConnected()) {
+    httpServer.send(200, "application/json", buildLocalConfig());
+    return;
+  }
+  forwardAndReply("GET", "/api/config", "");
+}
 
 static void handlePostSwitches() {
   forwardAndReply("POST", "/api/switches", httpServer.arg("plain"));
@@ -134,9 +199,38 @@ static void handleDeleteSwitch() {
   forwardAndReply("DELETE", "/api/switches/" + httpServer.pathArg(0), "");
 }
 
-static void handleGetChannels() { forwardAndReply("GET", "/api/channels", ""); }
+static void handleGetChannels() {
+  if (!cloudClientIsConnected()) {
+    httpServer.send(200, "application/json", buildLocalChannels());
+    return;
+  }
+  forwardAndReply("GET", "/api/channels", "");
+}
 
 static void handlePostChannelState() {
+  if (!cloudClientIsConnected()) {
+    // Offline LAN control — same "device owns its relays" exception as a
+    // physical wall switch: backend-only lock/min-off rules can't be
+    // checked, so they don't apply here.
+    String arg = httpServer.pathArg(0);
+    int idx = arg.toInt();
+    JsonDocument doc;
+    bool okBody = deserializeJson(doc, httpServer.arg("plain")) == DeserializationError::Ok;
+    const char *state = okBody ? (doc["state"] | "") : "";
+    bool validState = strcmp(state, "ON") == 0 || strcmp(state, "OFF") == 0;
+    if (arg.length() == 0 || idx < 0 || idx >= relayHalChannelCount() || !validState) {
+      httpServer.send(400, "application/json", makeErrorBody("invalid channel state request"));
+      return;
+    }
+    channelControlSetState((uint8_t)idx, strcmp(state, "ON") == 0);
+    JsonDocument resp;
+    resp["channel_idx"] = idx;
+    resp["state"] = state;
+    String out;
+    serializeJson(resp, out);
+    httpServer.send(200, "application/json", out);
+    return;
+  }
   forwardAndReply("POST", "/api/channels/" + httpServer.pathArg(0) + "/state",
                    httpServer.arg("plain"));
 }
@@ -214,6 +308,45 @@ static void handlePostNetwork() {
   }
 }
 
+// ----------------------------------------------- POST /api/reboot, /factory-reset
+//
+// Device-local maintenance, never forwarded. Factory reset requires
+// {"confirm":"FACTORY_RESET"} so a stray/replayed request can't wipe the
+// device. Both reply 202 first and act ~800ms later.
+
+bool httpApiHandleMaintenance(const char *method, const String &path, const String &bodyJson,
+                               int *outStatus, String *outBody) {
+  if (strcmp(method, "POST") != 0) return false;
+  if (path == "/api/reboot") {
+    recoveryRequestReboot(800);
+    *outStatus = 202;
+    *outBody = "{\"ok\":true,\"rebooting\":true}";
+    return true;
+  }
+  if (path == "/api/factory-reset") {
+    JsonDocument doc;
+    bool ok = deserializeJson(doc, bodyJson) == DeserializationError::Ok &&
+              strcmp(doc["confirm"] | "", "FACTORY_RESET") == 0;
+    if (!ok) {
+      *outStatus = 400;
+      *outBody = makeErrorBody("send {\"confirm\":\"FACTORY_RESET\"} to confirm");
+      return true;
+    }
+    recoveryRequestFactoryReset(800);
+    *outStatus = 202;
+    *outBody = "{\"ok\":true,\"resetting\":true}";
+    return true;
+  }
+  return false;
+}
+
+static void handleMaintenance(const char *path) {
+  int status;
+  String body;
+  httpApiHandleMaintenance("POST", path, httpServer.arg("plain"), &status, &body);
+  httpServer.send(status, "application/json", body);
+}
+
 // ------------------------------------------------------------------- setup
 
 void httpApiBegin() {
@@ -236,6 +369,8 @@ void httpApiBegin() {
   httpServer.on("/api/wifi", HTTP_GET, wifiProvisioningHandleGet);
   httpServer.on("/api/wifi", HTTP_POST, wifiProvisioningHandlePost);
   httpServer.on("/api/network", HTTP_POST, handlePostNetwork);
+  httpServer.on("/api/reboot", HTTP_POST, [] { handleMaintenance("/api/reboot"); });
+  httpServer.on("/api/factory-reset", HTTP_POST, [] { handleMaintenance("/api/factory-reset"); });
 
   httpServer.begin();
 }

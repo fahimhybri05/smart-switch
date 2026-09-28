@@ -17,6 +17,7 @@ class DeviceConfig {
     this.latitude = 0.0,
     this.longitude = 0.0,
     this.locationSet = false,
+    this.localOnly = false,
   });
 
   final String deviceId;
@@ -44,6 +45,11 @@ class DeviceConfig {
   /// them with an error otherwise).
   final bool locationSet;
 
+  /// True when the device answered this itself because it can't reach the
+  /// server: names + live states only, no schedules/zones, and edits fail
+  /// until it's back online. Switching on/off still works over the LAN.
+  final bool localOnly;
+
   factory DeviceConfig.fromJson(Map<String, dynamic> json) => DeviceConfig(
     deviceId: json['device_id'] as String,
     name: json['name'] as String,
@@ -62,6 +68,7 @@ class DeviceConfig {
     latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
     longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
     locationSet: json['location_set'] as bool? ?? false,
+    localOnly: json['local_only'] as bool? ?? false,
   );
 
   Map<String, dynamic> toJson() => {

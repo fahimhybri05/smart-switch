@@ -6,11 +6,11 @@
 #include "board_config.h"
 #include "config_store.h"
 
-#if SS_BOOT_BUTTON_GPIO >= 0
-
-static unsigned long s_pressStartMs = 0;
-static bool s_pressed = false;
-static bool s_holdLogged = false;
+// Deferred so the HTTP/cloud reply that requested the action can actually
+// leave the device before it restarts.
+enum class PendingAction { None, Reboot, FactoryReset };
+static PendingAction s_pending = PendingAction::None;
+static unsigned long s_pendingAtMs = 0;
 
 static void doFactoryReset() {
   Serial.println("recovery: factory reset — erasing WiFi + config, rebooting");
@@ -21,6 +21,32 @@ static void doFactoryReset() {
   ESP.restart();
 }
 
+void recoveryRequestReboot(uint32_t delayMs) {
+  if (s_pending == PendingAction::FactoryReset) return; // never downgrade a reset
+  s_pending = PendingAction::Reboot;
+  s_pendingAtMs = millis() + delayMs;
+}
+
+void recoveryRequestFactoryReset(uint32_t delayMs) {
+  s_pending = PendingAction::FactoryReset;
+  s_pendingAtMs = millis() + delayMs;
+}
+
+static void servicePendingAction() {
+  if (s_pending == PendingAction::None || (long)(millis() - s_pendingAtMs) < 0) return;
+  if (s_pending == PendingAction::FactoryReset) {
+    doFactoryReset(); // does not return
+  }
+  Serial.println("recovery: reboot requested");
+  delay(100);
+  ESP.restart();
+}
+
+#if SS_BOOT_BUTTON_GPIO >= 0
+
+static unsigned long s_pressStartMs = 0;
+static bool s_pressed = false;
+static bool s_holdLogged = false;
 static int s_lastLevel = -1;
 
 void recoveryButtonBegin() {
@@ -31,6 +57,8 @@ void recoveryButtonBegin() {
 }
 
 void recoveryButtonLoop() {
+  servicePendingAction();
+
   int level = digitalRead(SS_BOOT_BUTTON_GPIO);
   if (level != s_lastLevel) {
     s_lastLevel = level;
@@ -62,6 +90,6 @@ void recoveryButtonLoop() {
 #else
 
 void recoveryButtonBegin() {}
-void recoveryButtonLoop() {}
+void recoveryButtonLoop() { servicePendingAction(); }
 
 #endif

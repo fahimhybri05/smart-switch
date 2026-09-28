@@ -522,6 +522,20 @@ test('dispatchDeviceApi GET /api/wifi/scan relays to the device, query string in
   assert.equal(body.scanning, true);
 });
 
+test('dispatchDeviceApi relays POST /api/reboot and /api/factory-reset to the device', async (t) => {
+  const socket = new FakeSocket();
+  registerDevice('esp-maint', socket);
+  t.after(() => unregisterDevice('esp-maint', socket));
+
+  for (const path of ['/api/reboot', '/api/factory-reset']) {
+    socket.sent.length = 0;
+    const p = dispatchDeviceApi('esp-maint', 'POST', path, { confirm: 'FACTORY_RESET' });
+    assert.equal(socket.sent[0].path, path);
+    resolveDeviceResponse(socket.sent[0].reqId, 202, { ok: true });
+    assert.equal((await p).status, 202);
+  }
+});
+
 test('dispatchDeviceApi POST /api/wifi maps an offline device to 503', async () => {
   const { status, body } = await dispatchDeviceApi('esp-definitely-not-connected', 'POST', '/api/wifi', {
     ssid: 'x',

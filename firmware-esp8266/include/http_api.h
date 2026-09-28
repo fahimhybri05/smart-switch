@@ -42,6 +42,12 @@ bool httpApiForward(const char *method, const char *path, const char *bodyJson,
 // ordering as before.
 void httpApiHandleNetworkConfig(const String &bodyJson, int *outStatus, String *outBody);
 
+// POST /api/reboot and /api/factory-reset ({"confirm":"FACTORY_RESET"}) —
+// shared by the local routes and the cloud-relayed path. Returns false if
+// [path]/[method] isn't one of these (caller handles it).
+bool httpApiHandleMaintenance(const char *method, const String &path, const String &bodyJson,
+                               int *outStatus, String *outBody);
+
 // GET /api/info's JSON body — device identity/runtime facts, answered
 // on-device for both the local route and backend-relayed requests.
 String httpApiBuildInfo();

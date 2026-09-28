@@ -6,6 +6,9 @@ import '../../models/device/channel_state.dart';
 import '../../models/device/switch_config.dart';
 import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
+import '../../services/device_api_client.dart';
+import '../../services/provisioning/softap_provisioning_client.dart'
+    show kDeviceHotspotPassword;
 import '../../theme/app_theme.dart';
 import '../../theme/spacing.dart';
 import '../device_health/device_health_screen.dart';
@@ -37,7 +40,10 @@ class DeviceDetailScreen extends ConsumerWidget {
     // `_LiveOnCount` pattern for the same class of bug.
     final config = ref.watch(deviceConfigProvider(device));
     return Scaffold(
-      appBar: AppBar(title: Text(device.friendlyName)),
+      appBar: AppBar(
+        title: Text(device.friendlyName),
+        actions: [_DeviceMenu(device: device)],
+      ),
       body: config.when(
         loading: () => const LoadingView(),
         error: (error, _) => ErrorView(
@@ -54,6 +60,10 @@ class DeviceDetailScreen extends ConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.all(Spacing.md),
               children: [
+                if (value.localOnly) ...[
+                  const _LocalOnlyBanner(),
+                  const SizedBox(height: Spacing.md),
+                ],
                 _LiveDeviceHero(device: device, gangCount: value.channelCount),
                 const SizedBox(height: Spacing.md),
                 Text(
@@ -559,6 +569,183 @@ class _WifiTile extends ConsumerWidget {
                 ).showSnackBar(SnackBar(content: Text('Copied $ip')));
               },
       ),
+    );
+  }
+}
+
+/// Shown when the device answered over the LAN itself because it can't
+/// reach the server — see [DeviceConfig.localOnly].
+class _LocalOnlyBanner extends StatelessWidget {
+  const _LocalOnlyBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      color: colorScheme.tertiaryContainer,
+      child: ListTile(
+        leading: Icon(
+          Icons.cloud_off_rounded,
+          color: colorScheme.onTertiaryContainer,
+        ),
+        title: Text(
+          'Local control only',
+          style: TextStyle(color: colorScheme.onTertiaryContainer),
+        ),
+        subtitle: Text(
+          "This device can't reach the server right now. You can still "
+          'switch it on/off and change its WiFi from this network; '
+          'schedules and settings come back when it reconnects.',
+          style: TextStyle(color: colorScheme.onTertiaryContainer),
+        ),
+      ),
+    );
+  }
+}
+
+enum _DeviceAction { wifi, reboot, factoryReset }
+
+/// AppBar overflow: Change WiFi, Reboot, Factory reset.
+class _DeviceMenu extends ConsumerWidget {
+  const _DeviceMenu({required this.device});
+
+  final KnownDevice device;
+
+  Future<bool> _confirm(
+    BuildContext context, {
+    required String title,
+    required String body,
+    required String action,
+    bool destructive = false,
+  }) async {
+    final colorScheme = Theme.of(context).colorScheme;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(body),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: destructive
+                ? FilledButton.styleFrom(
+                    backgroundColor: colorScheme.error,
+                    foregroundColor: colorScheme.onError,
+                  )
+                : null,
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(action),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  String _errorText(Object e, String action) =>
+      e is DeviceApiException && e.statusCode == 403
+      ? 'Only a household owner can do that.'
+      : friendlyErrorMessage(e, action);
+
+  Future<void> _reboot(BuildContext context, WidgetRef ref) async {
+    final ok = await _confirm(
+      context,
+      title: 'Reboot ${device.friendlyName}?',
+      body:
+          'The device restarts and is offline for about 20 seconds. '
+          'Switches return to their last state.',
+      action: 'Reboot',
+    );
+    if (!ok || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(activeDeviceApiClientProvider(device)).reboot();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Rebooting… back in about 20 seconds.')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(_errorText(e, 'Reboot'))));
+    }
+  }
+
+  Future<void> _factoryReset(BuildContext context, WidgetRef ref) async {
+    final ok = await _confirm(
+      context,
+      title: 'Factory reset ${device.friendlyName}?',
+      body:
+          'This erases the device\'s WiFi and all settings stored on it, '
+          'then it restarts in setup mode with its own hotspot '
+          '("SmartSwitch-${device.deviceId}", password $kDeviceHotspotPassword). '
+          'It stays in your account — join that hotspot to connect it to '
+          'WiFi again.\n\nThis can\'t be undone.',
+      action: 'Factory reset',
+      destructive: true,
+    );
+    if (!ok || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(activeDeviceApiClientProvider(device)).factoryReset();
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Resetting… the device will restart in setup mode.'),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(_errorText(e, 'Factory reset'))),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return PopupMenuButton<_DeviceAction>(
+      tooltip: 'Device options',
+      onSelected: (action) => switch (action) {
+        _DeviceAction.wifi => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ChangeWifiScreen(device: device),
+          ),
+        ),
+        _DeviceAction.reboot => _reboot(context, ref),
+        _DeviceAction.factoryReset => _factoryReset(context, ref),
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: _DeviceAction.wifi,
+          child: ListTile(
+            leading: Icon(Icons.wifi_rounded),
+            title: Text('Change WiFi'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuItem(
+          value: _DeviceAction.reboot,
+          child: ListTile(
+            leading: Icon(Icons.restart_alt_rounded),
+            title: Text('Reboot'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          value: _DeviceAction.factoryReset,
+          child: ListTile(
+            leading: Icon(
+              Icons.delete_forever_outlined,
+              color: Theme.of(context).colorScheme.error,
+            ),
+            title: Text(
+              'Factory reset',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+      ],
     );
   }
 }

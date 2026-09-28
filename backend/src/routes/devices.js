@@ -183,6 +183,9 @@ devicesRouter.post('/:deviceId/command', async (req, res) => {
   }
 
   const { method, path, body, source } = parsed.data;
+  if (path === '/api/factory-reset' && !isHouseholdOwner(req, householdId)) {
+    return res.status(403).json({ error: 'only a household owner can factory-reset a device' });
+  }
   const match = path.match(CHANNEL_STATE_PATH);
   if (!match || method !== 'POST') {
     // Everything except actuation is answered by the backend itself — the

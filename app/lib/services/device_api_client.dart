@@ -280,6 +280,30 @@ class DeviceApiClient {
   Future<List<WifiNetwork>> scanWifiUntilDone({bool refresh = false}) =>
       pollWifiScan((r) => scanWifi(refresh: r), refresh: refresh);
 
+  /// POST /api/reboot — the device replies, then restarts (~20 s offline).
+  Future<void> reboot() async {
+    final resp = await _transport.send(
+      'POST',
+      '/api/reboot',
+      body: const {},
+      allowFallbackAfterTimeout: false,
+    );
+    await _decodeOrThrow(resp);
+  }
+
+  /// POST /api/factory-reset — erases the device's WiFi + local config (same
+  /// as holding FLASH for 7 s); it reboots into its setup hotspot. The
+  /// backend only relays this for a household owner (403 otherwise).
+  Future<void> factoryReset() async {
+    final resp = await _transport.send(
+      'POST',
+      '/api/factory-reset',
+      body: const {'confirm': 'FACTORY_RESET'},
+      allowFallbackAfterTimeout: false,
+    );
+    await _decodeOrThrow(resp);
+  }
+
   /// Out of scope for this pass — no OTA upload UI (see docs/plan.md).
   Future<void> uploadOta(List<int> firmwareBytes) => throw UnimplementedError();
 
