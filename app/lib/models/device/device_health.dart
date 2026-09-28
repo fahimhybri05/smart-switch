@@ -9,6 +9,8 @@ class DeviceHealth {
     this.firmware,
     this.resetReason,
     this.rssi,
+    this.ip,
+    this.ssid,
     this.freeHeap,
     this.uptimeS,
     this.reportedAt,
@@ -27,6 +29,11 @@ class DeviceHealth {
 
   /// Wi-Fi signal (dBm) measured when it last connected.
   final int? rssi;
+
+  /// LAN IP address and WiFi network name as of its latest connect — known
+  /// via the backend even when this phone is on a different network.
+  final String? ip;
+  final String? ssid;
   final int? freeHeap;
 
   /// Seconds since the device booted; only known while online.
@@ -38,6 +45,7 @@ class DeviceHealth {
       firmware != null ||
       resetReason != null ||
       rssi != null ||
+      ip != null ||
       freeHeap != null;
 
   static DateTime? _date(Object? v) =>
@@ -53,6 +61,8 @@ class DeviceHealth {
     firmware: json['firmware'] as String?,
     resetReason: json['resetReason'] as String?,
     rssi: _int(json['rssi']),
+    ip: json['ip'] as String?,
+    ssid: json['ssid'] as String?,
     freeHeap: _int(json['freeHeap']),
     uptimeS: _int(json['uptimeS']),
     reportedAt: _date(json['reportedAt']),

@@ -14,6 +14,7 @@ import '../../services/discovery_service.dart';
 import '../../services/provisioning/esp8266_provisioning_client.dart';
 import '../../services/provisioning/softap_provisioning_client.dart';
 import '../../theme/spacing.dart';
+import '../shared/wifi_network_picker.dart';
 
 typedef QrSetupPayload = ({String deviceId, String cloudSecret, String chip});
 
@@ -86,6 +87,7 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
   final _manualIpController = TextEditingController();
   final _ssidController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _passwordFocus = FocusNode();
   final _roomController = TextEditingController();
   final _nameController = TextEditingController();
 
@@ -96,6 +98,7 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
     _manualIpController.dispose();
     _ssidController.dispose();
     _passwordController.dispose();
+    _passwordFocus.dispose();
     _roomController.dispose();
     _nameController.dispose();
     super.dispose();
@@ -569,6 +572,13 @@ class _AddDeviceWizardScreenState extends ConsumerState<AddDeviceWizardScreen> {
               _Step.wifi => _WifiStep(
                 ssidController: _ssidController,
                 passwordController: _passwordController,
+                passwordFocus: _passwordFocus,
+                // Only the ESP8266 firmware can scan over its SoftAP; the
+                // ESP32's protocomm flow has no scan here — manual entry.
+                scanNetworks: _chip == 'esp8266'
+                    ? ({bool refresh = false}) => Esp8266ProvisioningClient()
+                          .scanNetworks(refresh: refresh)
+                    : null,
                 busy: _busy,
                 statusText: _statusText,
                 ssidErrorText: _ssidErrorText,
@@ -840,6 +850,13 @@ class _FoundStep extends StatelessWidget {
           "Let's connect this switch to your WiFi.",
           textAlign: TextAlign.center,
         ),
+        const SizedBox(height: Spacing.sm),
+        Text(
+          "First open your phone's WiFi settings and join the "
+          '"SmartSwitch-$deviceId" network (password '
+          '$kDeviceHotspotPassword), then come back here.',
+          textAlign: TextAlign.center,
+        ),
         const SizedBox(height: Spacing.md),
         FilledButton(onPressed: onContinue, child: const Text('Continue')),
       ],
@@ -851,6 +868,8 @@ class _WifiStep extends StatelessWidget {
   const _WifiStep({
     required this.ssidController,
     required this.passwordController,
+    required this.passwordFocus,
+    required this.scanNetworks,
     required this.busy,
     required this.statusText,
     required this.ssidErrorText,
@@ -860,6 +879,11 @@ class _WifiStep extends StatelessWidget {
 
   final TextEditingController ssidController;
   final TextEditingController passwordController;
+  final FocusNode passwordFocus;
+
+  /// Device-side WiFi scan for the "Nearby networks" picker — null (ESP32)
+  /// means manual entry only.
+  final WifiScanFn? scanNetworks;
   final bool busy;
   final String? statusText;
   final String? ssidErrorText;
@@ -881,7 +905,8 @@ class _WifiStep extends StatelessWidget {
         const SizedBox(height: Spacing.sm),
         const Text(
           'Make sure your phone is still connected to the '
-          "device's temporary network, then enter your home WiFi details.",
+          "device's temporary SmartSwitch-… network (password "
+          '$kDeviceHotspotPassword), then enter your home WiFi details.',
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: Spacing.lg),
@@ -895,9 +920,20 @@ class _WifiStep extends StatelessWidget {
           autocorrect: false,
           onChanged: (_) => onSsidChanged(),
         ),
+        if (scanNetworks case final scan?) ...[
+          const SizedBox(height: Spacing.sm),
+          WifiNetworkPicker(
+            scan: scan,
+            ssidController: ssidController,
+            passwordFocusNode: passwordFocus,
+            enabled: !busy,
+            onSelected: (_) => onSsidChanged(),
+          ),
+        ],
         const SizedBox(height: Spacing.sm),
         TextField(
           controller: passwordController,
+          focusNode: passwordFocus,
           decoration: const InputDecoration(
             labelText: 'WiFi password',
             prefixIcon: Icon(Icons.lock_outline_rounded),

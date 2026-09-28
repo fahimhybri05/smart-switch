@@ -55,7 +55,7 @@ const row = (diagnostics) => ({
 
 test('online device: diagnostics plus uptime extrapolated from the connect report', async (t) => {
   const at = new Date(Date.now() - 60_000).toISOString();
-  mockDb(row({ fw: '2.1.0', resetReason: 'Power On', uptimeS: 100, freeHeap: 30000, rssi: -61, at }));
+  mockDb(row({ fw: '2.1.0', resetReason: 'Power On', uptimeS: 100, freeHeap: 30000, rssi: -61, ip: '192.168.68.144', ssid: 'HomeNet', at }));
   const ws = { OPEN: 1, readyState: 1, send() {}, close() {} };
   registerDevice(DEVICE, ws);
   t.after(() => unregisterDevice(DEVICE, ws));
@@ -68,6 +68,8 @@ test('online device: diagnostics plus uptime extrapolated from the connect repor
   assert.equal(body.firmware, '2.1.0');
   assert.equal(body.resetReason, 'Power On');
   assert.equal(body.rssi, -61);
+  assert.equal(body.ip, '192.168.68.144');
+  assert.equal(body.ssid, 'HomeNet');
   assert.ok(body.uptimeS >= 159 && body.uptimeS <= 165, `uptime ${body.uptimeS}`);
 });
 
@@ -79,6 +81,7 @@ test('offline device: offlineSince set, no live uptime; old firmware without dia
   assert.equal(body.offlineSince, '2026-09-24T10:00:00.000Z');
   assert.equal(body.uptimeS, null);
   assert.equal(body.rssi, null);
+  assert.equal(body.ip, null);
 });
 
 test('non-member gets 404', async (t) => {

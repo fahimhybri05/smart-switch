@@ -9,6 +9,7 @@ import '../../services/discovery_service.dart';
 import '../../services/provisioning/softap_provisioning_client.dart';
 import '../../theme/spacing.dart';
 import '../shared/friendly_error.dart';
+import '../shared/wifi_network_picker.dart';
 
 /// Provisioning wizard:
 ///   1. First claim: the phone joins the device's SoftAP network manually
@@ -36,6 +37,7 @@ class _ProvisioningWizardScreenState
   KnownDevice? _reconfigTarget;
   final _ssidController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _passwordFocus = FocusNode();
   bool _reconfiguring = false;
   String? _reconfigStatusText;
 
@@ -50,6 +52,7 @@ class _ProvisioningWizardScreenState
     _scanSub?.cancel();
     _ssidController.dispose();
     _passwordController.dispose();
+    _passwordFocus.dispose();
     _softApNameController.dispose();
     _homeSsidController.dispose();
     _homePasswordController.dispose();
@@ -177,18 +180,16 @@ class _ProvisioningWizardScreenState
             'Testing… the device may briefly disconnect (up to ~20s).',
       );
 
-      // Poll GET /api/info a few times to learn the outcome.
+      // Poll GET /api/wifi a few times to learn the outcome.
       for (var i = 0; i < 8; i++) {
         await Future.delayed(const Duration(seconds: 3));
         try {
-          final info = await client.getInfo();
+          final status = await client.getWifiStatus();
           if (mounted) {
-            setState(
-              () => _reconfigStatusText = 'Status: ${info.wifiReconfigState}',
-            );
+            setState(() => _reconfigStatusText = 'Status: ${status.state}');
           }
-          if (info.wifiReconfigState == 'CONNECTED' ||
-              info.wifiReconfigState == 'FAILED_ROLLED_BACK') {
+          if (status.state == 'CONNECTED' ||
+              status.state == 'FAILED_ROLLED_BACK') {
             break;
           }
         } catch (_) {
@@ -226,8 +227,8 @@ class _ProvisioningWizardScreenState
             children: [
               const Text(
                 'Join your phone\'s WiFi to the device\'s SoftAP network first '
-                '(look for "SmartSwitch-<id>" in your system WiFi settings), '
-                'then come back here and fill in the network name below plus '
+                '(look for "SmartSwitch-<id>" in your system WiFi settings; '
+                'password $kDeviceHotspotPassword), then come back here and fill in the network name below plus '
                 'your home WiFi to provision it — no extra app needed.',
               ),
               const SizedBox(height: Spacing.md),
@@ -364,9 +365,23 @@ class _ProvisioningWizardScreenState
                   controller: _ssidController,
                   decoration: const InputDecoration(labelText: 'New WiFi SSID'),
                 ),
+                if (_reconfigTarget case final target?) ...[
+                  const SizedBox(height: Spacing.sm),
+                  // Keyed by device so picking another one re-scans.
+                  WifiNetworkPicker(
+                    key: ValueKey(target.deviceId),
+                    scan: ({bool refresh = false}) => ref
+                        .read(activeDeviceApiClientProvider(target))
+                        .scanWifiUntilDone(refresh: refresh),
+                    ssidController: _ssidController,
+                    passwordFocusNode: _passwordFocus,
+                    enabled: !_reconfiguring,
+                  ),
+                ],
                 const SizedBox(height: Spacing.sm),
                 TextField(
                   controller: _passwordController,
+                  focusNode: _passwordFocus,
                   decoration: const InputDecoration(
                     labelText: 'New WiFi password',
                   ),

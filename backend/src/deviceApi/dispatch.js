@@ -40,8 +40,8 @@ async function authorizeChannelStateFromDevice(deviceId, channelIdx, body) {
   return { status: 200, body: { channel_idx: channelIdx, state } };
 }
 
-/** `POST /api/network` — genuinely device-local network reconfiguration
- * (static IP / DHCP), not business logic. Per docs/plan.md, this is the
+/** `POST /api/network` / `/api/wifi` — genuinely device-local network
+ * reconfiguration (static IP / DHCP, WiFi credentials), not business logic. Per docs/plan.md, this is the
  * one path `dispatchDeviceApi` does NOT implement server-side — it relays
  * straight through via the same `relayCommand` primitive every other
  * backend-initiated actuation uses. In practice a LAN caller's own network
@@ -49,9 +49,9 @@ async function authorizeChannelStateFromDevice(deviceId, channelIdx, body) {
  * the cloud link it's trying to establish), so this branch mainly exists
  * for dispatchDeviceApi's other stated caller — a future first-party
  * dashboard REST route reusing the same dispatch table. */
-async function relayNetworkConfig(deviceId, body) {
+async function relayToDevice(deviceId, method, path, body) {
   try {
-    return await relayCommand(deviceId, { method: 'POST', path: '/api/network', body });
+    return await relayCommand(deviceId, { method, path, body });
   } catch (err) {
     if (err.code === 'device_offline') return { status: 503, body: { error: 'device_offline' } };
     if (err.code === 'device_timeout') return { status: 504, body: { error: 'device_timeout' } };
@@ -112,7 +112,21 @@ export async function dispatchDeviceApi(deviceId, method, path, body, { actorUse
       return await setSettings(deviceId, body);
     }
     if (method === 'POST' && path === '/api/network') {
-      return await relayNetworkConfig(deviceId, body);
+      return await relayToDevice(deviceId, method, path, body);
+    }
+    // WiFi change (POST, 202 + deferred connect-or-roll-back) and its real
+    // outcome (GET) — both genuinely device-local like /api/network, so
+    // relayed through rather than answered here. getInfo()'s
+    // wifi_reconfig_state is only a placeholder; remote callers poll
+    // GET /api/wifi instead.
+    if ((method === 'POST' || method === 'GET') && path === '/api/wifi') {
+      return await relayToDevice(deviceId, method, path, body);
+    }
+    // Nearby networks as seen by the device's own radio (async scan —
+    // `scanning: true` means poll again). Query string (`?refresh=1`) is
+    // passed through untouched.
+    if (method === 'GET' && (path === '/api/wifi/scan' || path.startsWith('/api/wifi/scan?'))) {
+      return await relayToDevice(deviceId, method, path, body);
     }
     if (method === 'POST' && path === '/api/auth/password') {
       return PASSWORD_ROUTE_REMOVED_RESPONSE;

@@ -22,6 +22,112 @@ class DeviceApiException implements Exception {
   String toString() => 'DeviceApiException($statusCode): $message';
 }
 
+/// GET /api/wifi's body. [state] is one of IDLE / TESTING / CONNECTED /
+/// FAILED_ROLLED_BACK (see firmware wifi_provisioning.h).
+class WifiStatus {
+  const WifiStatus({
+    required this.state,
+    required this.connected,
+    required this.ssid,
+    this.rssi,
+    this.ip,
+  });
+
+  factory WifiStatus.fromJson(Map<String, dynamic> json) => WifiStatus(
+    state: json['state'] as String? ?? 'IDLE',
+    connected: json['connected'] as bool? ?? false,
+    ssid: json['ssid'] as String? ?? '',
+    rssi: (json['rssi'] as num?)?.toInt(),
+    ip: json['ip'] as String?,
+  );
+
+  final String state;
+  final bool connected;
+  final String ssid;
+  final int? rssi;
+
+  /// LAN IP, only while connected (newer firmware).
+  final String? ip;
+}
+
+/// One entry of GET /api/wifi/scan — a network the DEVICE can see (not the
+/// phone), so it reflects what the device's own radio can actually reach.
+class WifiNetwork {
+  const WifiNetwork({
+    required this.ssid,
+    required this.rssi,
+    required this.secure,
+    this.channel,
+  });
+
+  factory WifiNetwork.fromJson(Map<String, dynamic> json) => WifiNetwork(
+    ssid: json['ssid'] as String? ?? '',
+    rssi: (json['rssi'] as num?)?.toInt() ?? -100,
+    secure: json['secure'] as bool? ?? true,
+    channel: (json['channel'] as num?)?.toInt(),
+  );
+
+  final String ssid;
+  final int rssi;
+  final bool secure;
+  final int? channel;
+}
+
+/// GET /api/wifi/scan's body. While [scanning] is true the device is still
+/// running a fresh async scan and [networks] may be the previous cached
+/// result — poll again (see [pollWifiScan]). The firmware already sorts
+/// strongest-first, dedupes by SSID and drops hidden networks.
+class WifiScanResult {
+  const WifiScanResult({required this.scanning, required this.networks});
+
+  factory WifiScanResult.fromJson(Map<String, dynamic> json) => WifiScanResult(
+    scanning: json['scanning'] as bool? ?? false,
+    networks: [
+      for (final e in json['networks'] as List<dynamic>? ?? const [])
+        if (e is Map<String, dynamic>) WifiNetwork.fromJson(e),
+    ].where((n) => n.ssid.isNotEmpty).toList(),
+  );
+
+  final bool scanning;
+  final List<WifiNetwork> networks;
+}
+
+/// The device's firmware predates GET /api/wifi/scan (404) — callers fall
+/// back to manual SSID entry without showing an error.
+class WifiScanUnsupportedException implements Exception {
+  const WifiScanUnsupportedException();
+
+  @override
+  String toString() => 'WiFi scan not supported by this firmware';
+}
+
+/// Runs one GET /api/wifi/scan via [fetch] and, while the device reports
+/// `scanning`, keeps polling every [interval] (at most [maxPolls] times,
+/// ~12 s by default). Returns the finished list — or, if the scan never
+/// finishes in time, whatever the device last returned. Shared by the
+/// normal [DeviceApiClient] path and the SoftAP setup path
+/// (esp8266_provisioning_client.dart).
+Future<List<WifiNetwork>> pollWifiScan(
+  Future<WifiScanResult> Function(bool refresh) fetch, {
+  bool refresh = false,
+  Duration interval = const Duration(milliseconds: 1500),
+  int maxPolls = 8,
+}) async {
+  var result = await fetch(refresh);
+  for (var i = 0; result.scanning && i < maxPolls; i++) {
+    await Future<void>.delayed(interval);
+    try {
+      result = await fetch(false);
+    } on WifiScanUnsupportedException {
+      rethrow;
+    } catch (_) {
+      // The radio hops channels while scanning, which can briefly drop a
+      // request (especially over the device's own SoftAP) — keep polling.
+    }
+  }
+  return result.networks;
+}
+
 /// One method per firmware §3 endpoint. Talks to a device through whatever
 /// [DeviceTransport] it's given — direct LAN HTTP (the default constructor,
 /// unchanged from before), a cloud relay, or an automatic fallback between
@@ -129,7 +235,9 @@ class DeviceApiClient {
   /// Always returns after a 202 — the firmware can never deliver a
   /// synchronous CONNECTED/FAILED_ROLLED_BACK (single STA radio can't stay
   /// associated to the current AP while test-connecting to a candidate).
-  /// Poll [getInfo]'s `wifiReconfigState` afterward to learn the outcome.
+  /// Poll [getWifiStatus] afterward to learn the outcome. Works over LAN
+  /// and the cloud relay alike. Not retried over the cloud after a local
+  /// timeout — a duplicate would hit the device's 409 "already in progress".
   Future<void> requestWifiReconfig({
     required String ssid,
     required String password,
@@ -138,11 +246,39 @@ class DeviceApiClient {
       'POST',
       '/api/wifi',
       body: {'ssid': ssid, 'password': password},
+      allowFallbackAfterTimeout: false,
     );
     if (resp.statusCode != 202) {
       await _decodeOrThrow(resp);
     }
   }
+
+  /// GET /api/wifi — the device's real reconfig state plus its current
+  /// network. Prefer this over [getInfo]'s `wifiReconfigState`, which the
+  /// cloud path only fills with a placeholder.
+  Future<WifiStatus> getWifiStatus() async {
+    final resp = await _transport.send('GET', '/api/wifi');
+    return WifiStatus.fromJson(await _decodeOrThrow(resp));
+  }
+
+  /// GET /api/wifi/scan — one request; see [scanWifiUntilDone] for the
+  /// polling wrapper most callers want. [refresh] forces the device to
+  /// start a fresh scan instead of returning its cached result. Throws
+  /// [WifiScanUnsupportedException] on older firmware (404).
+  Future<WifiScanResult> scanWifi({bool refresh = false}) async {
+    final resp = await _transport.send(
+      'GET',
+      refresh ? '/api/wifi/scan?refresh=1' : '/api/wifi/scan',
+    );
+    if (resp.statusCode == 404) {
+      throw const WifiScanUnsupportedException();
+    }
+    return WifiScanResult.fromJson(await _decodeOrThrow(resp));
+  }
+
+  /// [scanWifi] plus the "still scanning" poll loop — see [pollWifiScan].
+  Future<List<WifiNetwork>> scanWifiUntilDone({bool refresh = false}) =>
+      pollWifiScan((r) => scanWifi(refresh: r), refresh: refresh);
 
   /// Out of scope for this pass — no OTA upload UI (see docs/plan.md).
   Future<void> uploadOta(List<int> firmwareBytes) => throw UnimplementedError();

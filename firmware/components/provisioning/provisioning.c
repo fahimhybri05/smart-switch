@@ -171,12 +171,16 @@ esp_err_t provisioning_init(const char *device_id)
         char pop[24];
         snprintf(pop, sizeof(pop), "%s", device_id);
 
-        err = wifi_prov_mgr_start_provisioning(WIFI_PROV_SECURITY_1, pop, service_name, NULL);
+        // SoftAP WPA2 password — the same fixed value on every device, matching
+        // the ESP8266 firmware's SS_AP_PASSWORD (the app tells users to type it
+        // when joining "SmartSwitch-<id>"). Security1/POP still gates the
+        // provisioning session itself on top of this.
+        err = wifi_prov_mgr_start_provisioning(WIFI_PROV_SECURITY_1, pop, service_name, "12345678");
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "wifi_prov_mgr_start_provisioning failed: %s", esp_err_to_name(err));
             return err;
         }
-        ESP_LOGI(TAG, "SoftAP provisioning started: %s (open AP, security1 POP-gated)", service_name);
+        ESP_LOGI(TAG, "SoftAP provisioning started: %s (WPA2 password 12345678, security1 POP-gated)", service_name);
     } else {
         wifi_prov_mgr_deinit();
         apply_static_ip_if_configured();

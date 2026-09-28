@@ -53,6 +53,7 @@ export async function upsertSwitch(deviceId, body, { actorUserId = null } = {}) 
 
   // Never NULL: the app parses name/zone as non-nullable strings, and the
   // old firmware always sent "" for an unset value.
+  const nameProvided = body?.name !== undefined;
   const name = body?.name ?? '';
   const zone = body?.zone ?? '';
   const type = 'ON_OFF';
@@ -99,13 +100,14 @@ export async function upsertSwitch(deviceId, body, { actorUserId = null } = {}) 
   );
 
   // Only re-push hw config when the request actually touched a
-  // hw-relevant field — a plain name/zone rename doesn't need it. This
+  // device-cached field — input mode, inching, or the name (shown by the
+  // device's offline hotspot web UI). A zone-only edit doesn't need it. This
   // checks "did the request mention the field" rather than "did the value
   // actually change" (simpler, and a redundant fire-and-forget push is
   // harmless — the device treats it as idempotent cache state either way).
   // The safety/energy fields and the lock are backend-only (enforced on the
   // command path), so they never need a push.
-  if (inputModeProvided || inchingMsProvided) {
+  if (inputModeProvided || inchingMsProvided || nameProvided) {
     await pushHwConfigToDevice(deviceId);
   }
 

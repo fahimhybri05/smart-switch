@@ -318,6 +318,15 @@ class _HealthBody extends StatelessWidget {
                         : 'Measured when it last connected.',
                     warn: signal.weak,
                   ),
+                if (health.ip != null)
+                  _Metric(
+                    icon: Icons.lan_outlined,
+                    title: 'IP address',
+                    value: health.ip!,
+                    hint: health.ssid == null
+                        ? 'Its address on your local network.'
+                        : 'On "${health.ssid}". Its address on that local network.',
+                  ),
                 if (health.uptimeS != null)
                   _Metric(
                     icon: Icons.timer_outlined,

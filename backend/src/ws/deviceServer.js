@@ -17,7 +17,7 @@ import {
 const AUTH_TIMEOUT_MS = 5_000;
 const HEARTBEAT_INTERVAL_MS = 25_000;
 
-const DIAG_KEYS = ['fw', 'resetReason', 'uptimeS', 'freeHeap', 'rssi'];
+const DIAG_KEYS = ['fw', 'resetReason', 'uptimeS', 'freeHeap', 'rssi', 'ip', 'ssid'];
 
 /**
  * Firmware diagnostics from the auth frame's optional fields (older

@@ -445,6 +445,7 @@ test('extractDiagnostics keeps known fields only, sanitized', () => {
   assert.equal(d.rssi, -70);
   assert.equal(d.freeHeap, '123');
   assert.equal(d.evil, undefined);
+  assert.equal(extractDiagnostics({ ip: '10.0.0.5', ssid: 'Home' }).ip, '10.0.0.5');
   assert.ok(!Number.isNaN(Date.parse(d.at)));
 });
 

@@ -8,6 +8,7 @@ import '../../models/local/known_device.dart';
 import '../../providers/service_providers.dart';
 import '../../theme/motion.dart';
 import '../../theme/spacing.dart';
+import '../device_detail/change_wifi_screen.dart';
 import '../device_detail/device_detail_screen.dart';
 import 'device_visualization.dart';
 import 'edit_switch_dialog.dart';
@@ -180,6 +181,13 @@ class DeviceTile extends ConsumerWidget {
                                           DeviceDetailScreen(device: device),
                                     ),
                                   );
+                                } else if (value == 'wifi') {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) =>
+                                          ChangeWifiScreen(device: device),
+                                    ),
+                                  );
                                 } else if (value == 'edit') {
                                   _edit(context, ref);
                                 }
@@ -192,6 +200,10 @@ class DeviceTile extends ConsumerWidget {
                                 PopupMenuItem(
                                   value: 'edit',
                                   child: Text('Switch settings'),
+                                ),
+                                PopupMenuItem(
+                                  value: 'wifi',
+                                  child: Text('Change WiFi'),
                                 ),
                               ],
                             ),

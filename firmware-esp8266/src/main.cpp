@@ -5,6 +5,7 @@
 #include "cloud_client.h"
 #include "config_store.h"
 #include "http_api.h"
+#include "local_schedule.h"
 #include "physical_input.h"
 #include "recovery_button.h"
 #include "relay_hal.h"
@@ -55,6 +56,7 @@ void setup() {
   restoreLastStates();
   channelControlInit();
   physicalInputInit();
+  localScheduleBegin();
 
   // Printed once per boot so a fresh board's QR sticker can be generated
   // right after flashing — the app's QR wizard reads &chip= to pick the
@@ -87,5 +89,6 @@ void loop() {
   channelControlLoop();
   physicalInputLoop();
   cloudClientLoop();
+  localScheduleLoop();
   recoveryButtonLoop();
 }

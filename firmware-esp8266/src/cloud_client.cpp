@@ -124,9 +124,9 @@ static void sendReply(const char *reqId, int status, JsonVariant body) {
   s_ws.sendTXT(out);
 }
 
-// Only three backend-initiated request paths exist: apply a channel state
+// Only a handful of backend-initiated request paths exist: apply a channel state
 // (the disclosed hardware-actuation exception — the device still owns its
-// own relay hardware), device identity info, and device-local network reconfig (reachable here
+// own relay hardware), device identity info, and device-local network/WiFi reconfig (reachable here
 // when the app uses a cloud transport instead of LAN). Every other /api/*
 // path a LAN caller might hit is answered entirely server-side and never
 // reaches the device at all (see docs/plan.md's wire protocol section).
@@ -187,6 +187,41 @@ static void handleBackendRequest(const char *reqId, const char *method, const ch
     return;
   }
 
+  if (strcmp(method, "GET") == 0 && (p == "/api/wifi/scan" || p.startsWith("/api/wifi/scan?"))) {
+    JsonDocument scan;
+    deserializeJson(scan, wifiProvisioningScanJson(p.indexOf("refresh=1") >= 0));
+    sendReply(reqId, 200, scan.as<JsonVariant>());
+    return;
+  }
+
+  if (strcmp(method, "GET") == 0 && p == "/api/wifi") {
+    JsonDocument status;
+    deserializeJson(status, wifiProvisioningBuildStatus());
+    sendReply(reqId, 200, status.as<JsonVariant>());
+    return;
+  }
+
+  // WiFi change from the app while it's off-LAN. The reply goes out before
+  // the deferred (700ms) reconnect drops this socket; the app then polls
+  // GET /api/wifi once the device is back online.
+  if (strcmp(method, "POST") == 0 && p == "/api/wifi") {
+    String bodyStr;
+    if (!body.isNull()) {
+      serializeJson(body, bodyStr);
+    }
+    int status;
+    String outBody;
+    wifiProvisioningRequestReconfig(bodyStr, &status, &outBody);
+
+    JsonDocument parsed;
+    JsonVariant replyBody;
+    if (outBody.length() > 0 && deserializeJson(parsed, outBody) == DeserializationError::Ok) {
+      replyBody = parsed.as<JsonVariant>();
+    }
+    sendReply(reqId, status, replyBody);
+    return;
+  }
+
   // No other backend-initiated request path exists anymore — the device
   // holds no other config to mutate.
   JsonDocument err;
@@ -207,6 +242,7 @@ static void handleHwConfigPush(JsonDocument &doc) {
   for (uint8_t i = 0; i < SS_CHANNEL_COUNT; i++) {
     configStore.setChannelHw(i, "DISABLED", 0);
   }
+  bool seenName[SS_CHANNEL_COUNT] = {false};
   JsonArray channels = doc["channels"];
   for (JsonObject ch : channels) {
     int idx = ch["channelIdx"] | -1;
@@ -214,6 +250,11 @@ static void handleHwConfigPush(JsonDocument &doc) {
     const char *inputMode = ch["inputMode"] | "DISABLED";
     uint32_t inchingMs = ch["inchingMs"] | 0;
     configStore.setChannelHw((uint8_t)idx, inputMode, inchingMs);
+    seenName[idx] = true;
+    configStore.setChannelName((uint8_t)idx, ch["name"] | "");
+  }
+  for (uint8_t i = 0; i < SS_CHANNEL_COUNT; i++) {
+    if (!seenName[i]) configStore.setChannelName(i, "");
   }
   if (!doc["interlockEnabled"].isNull()) {
     configStore.setInterlockEnabled(doc["interlockEnabled"] | false);
@@ -232,6 +273,10 @@ static void sendAuthFrame() {
   doc["uptimeS"] = millis() / 1000;
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["rssi"] = WiFi.RSSI();
+  // LAN address + network, so the app can show them even when the phone
+  // isn't on the same network.
+  doc["ip"] = WiFi.localIP().toString();
+  doc["ssid"] = WiFi.SSID();
   String out;
   serializeJson(doc, out);
   s_ws.sendTXT(out);

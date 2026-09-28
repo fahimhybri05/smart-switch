@@ -6,6 +6,7 @@
 #include "channel_control.h"
 #include "cloud_client.h"
 #include "config_store.h"
+#include "local_web.h"
 #include "relay_hal.h"
 #include "wifi_provisioning.h"
 
@@ -219,7 +220,7 @@ void httpApiBegin() {
   httpServer.collectHeaders("Authorization");
   httpServer.enableCORS(true);
 
-  httpServer.on("/", HTTP_GET, wifiProvisioningHandleFormPage);
+  localWebRegister(); // GET / + /local/* (offline hotspot page)
   httpServer.on("/api/info", HTTP_GET, handleGetInfo);
   httpServer.on("/api/config", HTTP_GET, handleGetConfig);
   httpServer.on("/api/switches", HTTP_POST, handlePostSwitches);
@@ -231,6 +232,8 @@ void httpApiBegin() {
   httpServer.on("/api/auth/password", HTTP_POST, handlePostAuthPassword);
   httpServer.on("/api/timezone", HTTP_POST, handlePostTimezone);
   httpServer.on("/api/settings", HTTP_POST, handlePostSettings);
+  httpServer.on("/api/wifi/scan", HTTP_GET, wifiProvisioningHandleScan);
+  httpServer.on("/api/wifi", HTTP_GET, wifiProvisioningHandleGet);
   httpServer.on("/api/wifi", HTTP_POST, wifiProvisioningHandlePost);
   httpServer.on("/api/network", HTTP_POST, handlePostNetwork);
 

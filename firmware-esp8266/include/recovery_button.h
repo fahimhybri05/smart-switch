@@ -1,11 +1,10 @@
 #pragma once
 
-// Mirrors the ESP32 firmware's recovery_button component: short hold =
-// WiFi-only reset, long hold = full factory reset. A no-op if
-// SS_BOOT_BUTTON_GPIO is -1 (board_config.h) — this pin-scarce board has
-// no free GPIO for a button in the default wiring; until one is freed up,
-// factory reset means re-flashing over USB (erase_flash), which the bench
-// setup already has access to.
+// BOOT/FLASH button (SS_BOOT_BUTTON_GPIO, board_config.h): hold for
+// SS_BOOT_FACTORY_RESET_HOLD_MS (7s) = factory reset — erases WiFi
+// credentials and all local config, keeps device identity, then reboots
+// into SoftAP setup mode. Shorter presses do nothing. A no-op if
+// SS_BOOT_BUTTON_GPIO is -1.
 void recoveryButtonBegin();
 
 void recoveryButtonLoop();

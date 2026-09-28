@@ -23,6 +23,7 @@ struct SsChannelHw {
   uint8_t channel_idx = 0;
   char inputMode[10] = "DISABLED";  // "DISABLED" | "TOGGLE" | "EDGE"
   uint32_t inchingMs = 0;  // 0 = disabled; ms before an ON channel auto-reverses to OFF
+  char name[24] = "";      // backend switch name — label for the offline hotspot web UI only
 };
 
 struct SsConfig {
@@ -76,6 +77,9 @@ class ConfigStore {
   // cloud_client.cpp's hw_config_push handler.
   void setChannelHw(uint8_t channel_idx, const char *inputMode, uint32_t inchingMs);
 
+  // Label only (see SsChannelHw::name); a no-op for an unknown channel.
+  void setChannelName(uint8_t channel_idx, const char *name);
+
   void setInterlockEnabled(bool enabled);
 
   // Called from channelControlSetState() on every state change, whatever
@@ -88,6 +92,11 @@ class ConfigStore {
   // to fall back to gateway.
   void setStaticIp(bool enabled, const char *ip, const char *gateway, const char *subnet,
                     const char *dns);
+
+  // Wipes LittleFS and rewrites a fresh default config, keeping only the
+  // device identity (device_id + cloud_secret) — a regenerated secret would
+  // no longer match the backend's stored hash or the printed QR sticker.
+  void factoryReset();
 
  private:
   SsConfig _cfg;

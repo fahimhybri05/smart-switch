@@ -88,6 +88,7 @@ bool ConfigStore::loadFromDisk() {
     out.channel_idx = ch["channel_idx"] | 0;
     strlcpy(out.inputMode, ch["input_mode"] | "DISABLED", sizeof(out.inputMode));
     out.inchingMs = ch["inching_ms"] | 0;
+    strlcpy(out.name, ch["name"] | "", sizeof(out.name));
   }
 
   _cfg.interlockEnabled = doc["interlock_enabled"] | false;
@@ -134,6 +135,7 @@ void ConfigStore::save() {
     ch["channel_idx"] = _cfg.channelHw[i].channel_idx;
     ch["input_mode"] = _cfg.channelHw[i].inputMode;
     ch["inching_ms"] = _cfg.channelHw[i].inchingMs;
+    ch["name"] = _cfg.channelHw[i].name;
   }
 
   doc["interlock_enabled"] = _cfg.interlockEnabled;
@@ -190,6 +192,18 @@ void ConfigStore::setChannelHw(uint8_t channel_idx, const char *inputMode, uint3
   }
 }
 
+void ConfigStore::setChannelName(uint8_t channel_idx, const char *name) {
+  for (uint8_t i = 0; i < _cfg.channelHwCount; i++) {
+    if (_cfg.channelHw[i].channel_idx == channel_idx) {
+      if (strcmp(_cfg.channelHw[i].name, name) != 0) {
+        strlcpy(_cfg.channelHw[i].name, name, sizeof(_cfg.channelHw[i].name));
+        markDirty(&_dirty, &_dirtySinceMs);
+      }
+      return;
+    }
+  }
+}
+
 void ConfigStore::setInterlockEnabled(bool enabled) {
   _cfg.interlockEnabled = enabled;
   markDirty(&_dirty, &_dirtySinceMs);
@@ -219,6 +233,22 @@ void ConfigStore::setStaticIp(bool enabled, const char *ip, const char *gateway,
   // further loop() iteration in between to ever pick up a debounced write.
   // Writing synchronously here is simpler than adding a special early-flush
   // call at each of those call sites.
+  save();
+}
+
+void ConfigStore::factoryReset() {
+  char deviceId[sizeof(_cfg.device_id)];
+  char cloudSecret[sizeof(_cfg.cloud_secret)];
+  strlcpy(deviceId, _cfg.device_id, sizeof(deviceId));
+  strlcpy(cloudSecret, _cfg.cloud_secret, sizeof(cloudSecret));
+
+  LittleFS.format();
+  LittleFS.begin(); // format() unmounts — remount before writing
+
+  loadDefault();
+  strlcpy(_cfg.device_id, deviceId, sizeof(_cfg.device_id));
+  strlcpy(_cfg.cloud_secret, cloudSecret, sizeof(_cfg.cloud_secret));
+  _dirty = false;
   save();
 }
 

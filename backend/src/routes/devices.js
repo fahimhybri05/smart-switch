@@ -283,6 +283,10 @@ devicesRouter.get('/:deviceId/health', async (req, res) => {
     firmware: diag?.fw != null ? String(diag.fw) : null,
     resetReason: diag?.resetReason != null ? String(diag.resetReason) : null,
     rssi: num(diag?.rssi),
+    // LAN address/network as of its latest connect — lets the app show
+    // them even when the phone is on a different network.
+    ip: diag?.ip != null ? String(diag.ip) : null,
+    ssid: diag?.ssid != null ? String(diag.ssid) : null,
     freeHeap: num(diag?.freeHeap),
     uptimeS,
     reportedAt: diag?.at ?? null,

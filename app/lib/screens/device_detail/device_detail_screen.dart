@@ -9,6 +9,7 @@ import '../../providers/service_providers.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/spacing.dart';
 import '../device_health/device_health_screen.dart';
+import 'change_wifi_screen.dart';
 import '../shared/device_visualization.dart';
 import '../shared/edit_switch_dialog.dart';
 import '../shared/error_view.dart';
@@ -75,6 +76,8 @@ class DeviceDetailScreen extends ConsumerWidget {
                   const SizedBox(height: Spacing.md),
                   _HealthTile(device: device),
                 ],
+                const SizedBox(height: Spacing.sm),
+                _WifiTile(device: device),
                 const SizedBox(height: Spacing.lg),
                 Row(
                   children: [
@@ -506,6 +509,55 @@ class _HealthTile extends ConsumerWidget {
             builder: (_) => DeviceHealthScreen(device: device),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Current network + LAN IP, opening [ChangeWifiScreen]. The IP comes from
+/// the backend (reported by the device on connect), so it shows even when
+/// this phone is on a different network; falls back to the last IP seen on
+/// the LAN when signed out.
+class _WifiTile extends ConsumerWidget {
+  const _WifiTile({required this.device});
+
+  final KnownDevice device;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final health = ref.watch(authProvider) == null
+        ? null
+        : ref.watch(deviceHealthProvider(device.deviceId)).asData?.value;
+    final ip = health?.ip ?? device.lastKnownIp;
+    final details = [
+      health?.ssid,
+      if (ip != null) 'IP $ip',
+    ].whereType<String>().where((s) => s.isNotEmpty).join(' · ');
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: Icon(
+          Icons.wifi_rounded,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        title: const Text('WiFi network'),
+        subtitle: Text(
+          details.isEmpty ? 'Change the network this device uses' : details,
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ChangeWifiScreen(device: device),
+          ),
+        ),
+        onLongPress: ip == null
+            ? null
+            : () {
+                Clipboard.setData(ClipboardData(text: ip));
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Copied $ip')));
+              },
       ),
     );
   }

@@ -19,7 +19,7 @@ import { sendHwConfigPush } from '../ws/registry.js';
 export async function pushHwConfigToDevice(deviceId) {
   const [{ rows: switchRows }, { rows: settingsRows }] = await Promise.all([
     pool.query(
-      'SELECT channel_idx, input_mode, inching_ms FROM device_switches WHERE device_id = $1 ORDER BY channel_idx',
+      "SELECT channel_idx, COALESCE(name, '') AS name, input_mode, inching_ms FROM device_switches WHERE device_id = $1 ORDER BY channel_idx",
       [deviceId],
     ),
     pool.query('SELECT interlock_enabled FROM device_settings WHERE device_id = $1', [deviceId]),
@@ -27,6 +27,8 @@ export async function pushHwConfigToDevice(deviceId) {
 
   const channels = switchRows.map((row) => ({
     channelIdx: row.channel_idx,
+    // Cached on-device only for its offline hotspot web UI's labels.
+    name: row.name ?? '',
     inputMode: row.input_mode,
     inchingMs: row.inching_ms,
   }));

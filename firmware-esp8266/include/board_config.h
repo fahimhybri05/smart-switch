@@ -48,14 +48,19 @@ static const int8_t SS_RELAY_GPIO[SS_CHANNEL_COUNT] = {
 #define SS_I2C_SDA_GPIO 2  // D4
 #define SS_I2C_SCL_GPIO 15 // D8
 
-// BOOT-equivalent recovery button: short hold = WiFi-only reset, long hold
-// = full factory reset — mirrors the ESP32 firmware's recovery_button
-// component. GPIO0 is this board's physical BOOT/FLASH button (see the pin
-// map note above) — active-low + internal-pullup, same convention the
-// ESP32 board uses.
+// Setup/offline hotspot ("SmartSwitch-<device_id>") WPA2 password — the
+// same fixed value on every device (see docs/firmware-esp8266.md for the
+// trade-off). Must be 8-63 chars or softAP() refuses to start.
+#define SS_AP_PASSWORD "12345678"
+
+// BOOT-equivalent recovery button: hold >= SS_BOOT_FACTORY_RESET_HOLD_MS =
+// full factory reset (WiFi credentials + all local config; device identity
+// is kept — see configStore.factoryReset()). Shorter presses are ignored —
+// WiFi changes go through the app (POST /api/wifi) instead. GPIO0 is this
+// board's physical BOOT/FLASH button (see the pin map note above) —
+// active-low + internal-pullup, same convention the ESP32 board uses.
 #define SS_BOOT_BUTTON_GPIO 0
-#define SS_BOOT_SHORT_HOLD_MS 5000
-#define SS_BOOT_LONG_HOLD_MS 12000
+#define SS_BOOT_FACTORY_RESET_HOLD_MS 7000
 
 // Physical wall-switch/button input per channel — mirrors SS_RELAY_GPIO
 // above but for reading, not driving. -1 = not wired (default for every

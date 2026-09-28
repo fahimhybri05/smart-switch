@@ -144,7 +144,7 @@ test('dispatchDeviceApi POST /api/switches upserts and pushes hw_config_push whe
         },
       ],
     },
-    { rows: [{ channel_idx: 0, input_mode: 'TOGGLE', inching_ms: 0 }] }, // pushHwConfigToDevice: switches
+    { rows: [{ channel_idx: 0, name: 'Porch', input_mode: 'TOGGLE', inching_ms: 0 }] }, // pushHwConfigToDevice: switches
     { rows: [{ interlock_enabled: false }] }, // pushHwConfigToDevice: settings
   ]);
 
@@ -159,15 +159,15 @@ test('dispatchDeviceApi POST /api/switches upserts and pushes hw_config_push whe
   assert.equal(body.input_mode, 'TOGGLE');
   const pushed = socket.sent.find((m) => m.event === 'hw_config_push');
   assert.ok(pushed, 'expected an hw_config_push frame to be sent');
-  assert.deepEqual(pushed.channels, [{ channelIdx: 0, inputMode: 'TOGGLE', inchingMs: 0 }]);
+  assert.deepEqual(pushed.channels, [{ channelIdx: 0, name: 'Porch', inputMode: 'TOGGLE', inchingMs: 0 }]);
   assert.equal(pushed.interlockEnabled, false);
 });
 
-test('dispatchDeviceApi POST /api/switches does NOT push hw_config_push for a plain rename', async (t) => {
+test('dispatchDeviceApi POST /api/switches pushes hw_config_push on a rename (device caches names)', async (t) => {
   const socket = new FakeSocket();
-  registerDevice('esp-switch-norename-push', socket);
+  registerDevice('esp-switch-rename-push', socket);
   t.after(() => {
-    unregisterDevice('esp-switch-norename-push', socket);
+    unregisterDevice('esp-switch-rename-push', socket);
     mock.restoreAll();
   });
 
@@ -185,16 +185,53 @@ test('dispatchDeviceApi POST /api/switches does NOT push hw_config_push for a pl
         },
       ],
     },
+    { rows: [{ channel_idx: 0, name: 'New Name', input_mode: 'DISABLED', inching_ms: 0 }] },
+    { rows: [{ interlock_enabled: false }] },
   ]);
 
-  const { status } = await dispatchDeviceApi('esp-switch-norename-push', 'POST', '/api/switches', {
+  const { status } = await dispatchDeviceApi('esp-switch-rename-push', 'POST', '/api/switches', {
     channel_idx: 0,
     name: 'New Name',
     zone: 'Outside',
   });
 
   assert.equal(status, 200);
-  assert.equal(socket.sent.length, 0, 'a plain rename must not trigger any push to the device');
+  const pushed = socket.sent.find((m) => m.event === 'hw_config_push');
+  assert.ok(pushed, 'a rename must refresh the device-cached names');
+  assert.equal(pushed.channels[0].name, 'New Name');
+});
+
+test('dispatchDeviceApi POST /api/switches does NOT push for a safety-field-only change', async (t) => {
+  const socket = new FakeSocket();
+  registerDevice('esp-switch-nopush', socket);
+  t.after(() => {
+    unregisterDevice('esp-switch-nopush', socket);
+    mock.restoreAll();
+  });
+
+  mockQueryResults([
+    {
+      rows: [
+        {
+          channel_idx: 0,
+          name: '',
+          zone: '',
+          type: 'ON_OFF',
+          default_boot_state: 'OFF',
+          input_mode: 'DISABLED',
+          inching_ms: 0,
+        },
+      ],
+    },
+  ]);
+
+  const { status } = await dispatchDeviceApi('esp-switch-nopush', 'POST', '/api/switches', {
+    channel_idx: 0,
+    watts: 60,
+  });
+
+  assert.equal(status, 200);
+  assert.equal(socket.sent.length, 0, 'backend-only fields must not trigger any push to the device');
 });
 
 test('dispatchDeviceApi DELETE /api/switches/:idx always returns 204 and refreshes hw_config_push', async (t) => {
@@ -429,6 +466,65 @@ test('dispatchDeviceApi POST /api/network relays straight through to the device 
 test('dispatchDeviceApi POST /api/network maps an offline device to 503 (no socket registered)', async () => {
   const { status, body } = await dispatchDeviceApi('esp-definitely-not-connected', 'POST', '/api/network', {
     mode: 'dhcp',
+  });
+  assert.equal(status, 503);
+  assert.equal(body.error, 'device_offline');
+});
+
+test('dispatchDeviceApi POST /api/wifi relays straight through to the device', async (t) => {
+  const socket = new FakeSocket();
+  registerDevice('esp-wifi-relay', socket);
+  t.after(() => unregisterDevice('esp-wifi-relay', socket));
+
+  const resultPromise = dispatchDeviceApi('esp-wifi-relay', 'POST', '/api/wifi', {
+    ssid: 'HomeNet',
+    password: 'hunter22',
+  });
+
+  assert.equal(socket.sent.length, 1);
+  assert.equal(socket.sent[0].method, 'POST');
+  assert.equal(socket.sent[0].path, '/api/wifi');
+  assert.deepEqual(socket.sent[0].body, { ssid: 'HomeNet', password: 'hunter22' });
+
+  resolveDeviceResponse(socket.sent[0].reqId, 202, { state: 'TESTING' });
+
+  const { status, body } = await resultPromise;
+  assert.equal(status, 202);
+  assert.deepEqual(body, { state: 'TESTING' });
+});
+
+test('dispatchDeviceApi GET /api/wifi relays to the device for the real reconfig state', async (t) => {
+  const socket = new FakeSocket();
+  registerDevice('esp-wifi-status', socket);
+  t.after(() => unregisterDevice('esp-wifi-status', socket));
+
+  const resultPromise = dispatchDeviceApi('esp-wifi-status', 'GET', '/api/wifi', undefined);
+  assert.equal(socket.sent[0].method, 'GET');
+  assert.equal(socket.sent[0].path, '/api/wifi');
+
+  resolveDeviceResponse(socket.sent[0].reqId, 200, { state: 'CONNECTED', connected: true, ssid: 'HomeNet' });
+  const { status, body } = await resultPromise;
+  assert.equal(status, 200);
+  assert.equal(body.state, 'CONNECTED');
+});
+
+test('dispatchDeviceApi GET /api/wifi/scan relays to the device, query string intact', async (t) => {
+  const socket = new FakeSocket();
+  registerDevice('esp-wifi-scan', socket);
+  t.after(() => unregisterDevice('esp-wifi-scan', socket));
+
+  const resultPromise = dispatchDeviceApi('esp-wifi-scan', 'GET', '/api/wifi/scan?refresh=1', undefined);
+  assert.equal(socket.sent[0].path, '/api/wifi/scan?refresh=1');
+
+  resolveDeviceResponse(socket.sent[0].reqId, 200, { scanning: true, networks: [] });
+  const { status, body } = await resultPromise;
+  assert.equal(status, 200);
+  assert.equal(body.scanning, true);
+});
+
+test('dispatchDeviceApi POST /api/wifi maps an offline device to 503', async () => {
+  const { status, body } = await dispatchDeviceApi('esp-definitely-not-connected', 'POST', '/api/wifi', {
+    ssid: 'x',
   });
   assert.equal(status, 503);
   assert.equal(body.error, 'device_offline');

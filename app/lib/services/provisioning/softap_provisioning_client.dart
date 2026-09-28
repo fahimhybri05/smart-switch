@@ -18,6 +18,10 @@ class ProvisioningException implements Exception {
 
 enum ProvisioningOutcome { connected, failed }
 
+/// WPA2 password of every device's "SmartSwitch-…" setup hotspot (ESP32 and
+/// ESP8266 alike) — shown wherever the app asks the user to join it.
+const kDeviceHotspotPassword = '12345678';
+
 const _requestTimeout = Duration(seconds: 10);
 const _pollInterval = Duration(seconds: 5);
 const _maxRetries = 3;
@@ -72,7 +76,8 @@ class SoftApProvisioningClient {
     if (!bound) {
       throw ProvisioningException(
         'Could not bind to the device WiFi network — make sure your phone '
-        'is joined to the SmartSwitch-… network and try again.',
+        'is joined to the SmartSwitch-… network (password '
+        '$kDeviceHotspotPassword) and try again.',
       );
     }
 

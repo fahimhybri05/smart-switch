@@ -87,7 +87,7 @@ function withDevice(t) {
 
 const upsertCall = (calls) => calls.find((c) => c.sql.includes('INSERT INTO device_switches'));
 
-test('a name-only PATCH keeps the stored zone and boot state and pushes no hw config', async (t) => {
+test('a name-only PATCH keeps the stored zone and boot state and pushes the new name to the device', async (t) => {
   const calls = mockDb({ existing: { name: 'Lamp', zone: 'Kitchen', default_boot_state: 'ON' } });
   const device = withDevice(t);
   const call = await start(t);
@@ -103,7 +103,8 @@ test('a name-only PATCH keeps the stored zone and boot state and pushes no hw co
   assert.deepEqual(p.slice(0, 6), [DEVICE, 0, 'Big lamp', 'Kitchen', 'ON_OFF', 'ON']);
   assert.equal(p[8], false, 'input_mode must be preserved (not provided)');
   assert.equal(p[9], false, 'inching_ms must be preserved (not provided)');
-  assert.equal(device.sent.filter((m) => m.event === 'hw_config_push').length, 0);
+  // The device caches switch names for its offline hotspot web UI.
+  assert.equal(device.sent.filter((m) => m.event === 'hw_config_push').length, 1);
 });
 
 test('a PATCH with inputMode/inchingMs updates them and pushes hw config to the device', async (t) => {

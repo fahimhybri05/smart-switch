@@ -173,14 +173,35 @@ this tree — **never referenced anywhere in the source**. There is no status-LE
 code in this firmware; the constant appears to be a placeholder/leftover. This is a
 concrete gap worth flagging (see §14).
 
-**Recovery button**: `SS_BOOT_BUTTON_GPIO = -1` — **disabled by default**. The comment
-explains why: this board has no dedicated user button wired to a free GPIO, and GPIO0 (the
-usual "BOOT" button pin on ESP32 designs) is already a relay output here. The header
-instructs wiring an external momentary button to GND on whatever GPIO you assign,
-following "the ESP32 board's same active-low + internal-pullup convention," and
-explicitly warns builders to assign a real GPIO before relying on this feature (see §9 for
-what happens while it's `-1`). Thresholds: `SS_BOOT_SHORT_HOLD_MS = 5000`,
-`SS_BOOT_LONG_HOLD_MS = 12000`.
+**Recovery button**: `SS_BOOT_BUTTON_GPIO = 0` — the board's physical FLASH/BOOT button
+(active-low, internal pullup). Hold for `SS_BOOT_FACTORY_RESET_HOLD_MS = 7000` → factory
+reset: `configStore.factoryReset()` (formats LittleFS, rewrites defaults, **keeps
+`device_id` + `cloud_secret`** so the backend claim / QR sticker stay valid), then clears
+SDK WiFi credentials and reboots into SoftAP setup. Shorter presses do nothing — WiFi
+changes go through the app (`POST /api/wifi`, LAN or cloud-relayed; outcome via
+`GET /api/wifi`). Server-side config (switch names, schedules) lives in the backend and is
+not touched.
+
+**Setup / offline hotspot**: `SmartSwitch-<device_id>`, WPA2 password `SS_AP_PASSWORD`
+(`"12345678"`, identical on every device — the ESP32 firmware uses the same value). While
+the hotspot is up and the device has no WiFi connection (`wifiProvisioningIsLocalMode()`),
+`http://192.168.4.1/` serves an offline control page (`src/local_web.cpp`): on/off per
+channel + all-off, offline schedules, and WiFi setup with a nearby-network list. The
+`/local/*` JSON endpoints behind it answer 403 at any other time, and `GET /` shows a short
+"use the app" notice instead. Offline control skips backend-only rules (switch lock,
+min-off), same exception as a physical wall switch.
+
+**Offline schedules** (`src/local_schedule.cpp`, `/schedules.json`, max 16): separate from
+the backend's schedules and fire **only while the cloud link is down**, so the two never
+double-fire. Clock = SNTP when online, else the phone's time (the page posts it on load);
+no RTC driver yet, so after an offline reboot nothing fires until the page is opened once.
+
+**WiFi scan**: `GET /api/wifi/scan[?refresh=1]` → `{scanning, networks:[{ssid, rssi,
+secure, channel}]}` (async, 30 s cache, strongest-first, deduped, max 20). Local route +
+cloud-relayed; used by the app's network picker and the offline page.
+
+**Switch names**: now included in `hw_config_push` (re-pushed on rename) and cached per
+channel, only as labels for the offline page.
 
 **Cloud endpoint**: `SS_CLOUD_WS_HOST = "192.168.100.143"`, `SS_CLOUD_WS_PORT = 3000`,
 `SS_CLOUD_WS_PATH = "/device"`, `SS_CLOUD_WS_USE_TLS = false`. The host is a **hardcoded
